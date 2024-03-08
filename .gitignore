@@ -1,0 +1,10 @@
+# macOS
+.DS_STORE
+
+# IntelliJ
+.idea/
+!.idea/codestyles/
+!.idea/inspectionProfiles/
+!.idea/runConfigurations/
+!.idea/scopes/
+!.idea/vcs.xml

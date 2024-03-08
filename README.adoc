@@ -1,0 +1,25 @@
+= Pkl Evolution
+
+This repository hosts Suggested Pkl Improvement, Change, or Enhancements (SPICE) for improving the Pkl language, tooling, and ecosystem.
+
+== Status of pkl-evolution
+
+This repository serves two purposes:
+
+* To allow the Pkl language team to work on language changes and features.
+* To solicit and accept feedback from the Pkl community.
+
+Writing a SPICE is a lot of work.
+Avoid doing such work for nothing; if you would like to propose a SPICE, always start by submitting a topic to our xref:https://github.com/apple/pkl/discussions[discussions] forum.
+Once there is consensus there, a SPICE can be submitted.
+
+== Pkl language team
+
+The Pkl language team consists of (in alphabetical order):
+
+* Dan Chao (xref:https://github.com/bioball[@bioball])
+* Islon Scherer (xref:https://github.com/stackoverflow[@stackoverflow])
+* Philip Hölzenspies (xref:https://github.com/holzensp[@holzensp])
+
+== Credit
+This repository is modeled after xref:https://github.com/apple/swift-evolution[swift-evolution].

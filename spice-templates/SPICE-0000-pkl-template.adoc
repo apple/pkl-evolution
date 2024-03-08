@@ -1,0 +1,56 @@
+= SPICE Name
+
+* Proposal: [SPICE-NNNN](./SPICE-NNNN-name-of-proposal.adoc)
+* Status: Accepted or Rejected
+* Implemented in: Pkl <version>
+* Category: Language, Standard Library, Tooling
+
+== Introduction
+
+A short description of what the feature is. Try to keep it to a single-paragraph "elevator pitch" so the reader understands what problem this proposal is addressing.
+
+== Motivation
+
+Describe the problems that this proposal seeks to address. If the problem is that some common pattern is currently hard to express, show how one can currently get a similar effect and describe its drawbacks. If it's completely new functionality that cannot be emulated, motivate why this new functionality would help Pkl developers create better Pkl code.
+
+== Proposed Solution
+
+Describe your solution to the problem. Provide examples and describe how they work. Show how your solution is better than current workarounds: is it cleaner, safer, or more efficient?
+
+This section doesn't have to be comprehensive. Focus on the most important parts of the proposal and make arguments about why the proposal is better than the status quo.
+
+== Detailed design
+
+Describe the design of the solution in detail. If it involves new syntax in the language, show the additions and changes to the Pkl grammar. If it's a new API, show the full API and its documentation comments detailing what it does. The detail in this section should be sufficient for someone who is not one of the authors to be able to reasonably implement the feature.
+
+== Compatibility
+
+Describe the impact of this proposal on any compatibility issues that may arise if this change is implemented.
+
+For changes impacting the core language, describe source compatibility with existing Pkl programs.
+
+For changes to the API, or to the tooling, consider compatibility in terms of API usage, or shell scripting.
+
+== Future directions
+
+Describe any interesting proposals that could build on this proposal in the future. This is especially important when these future directions inform the design of the proposal, for example by making sure an attribute encodes enough information to be used for other purposes.
+
+The rest of the proposal should generally not talk about future directions except by referring to this section. It is important not to confuse reviewers about what is covered by this specific proposal. If there's a larger vision that needs to be explained in order to understand this proposal, consider starting a discussion thread on the forums to capture your broader thoughts.
+
+Avoid making affirmative statements in this section, such as "we will" or even "we should". Describe the proposals neutrally as possibilities to be considered in the future.
+
+Consider whether any of these future directions should really just be part of the current proposal. It's important to make focused, self-contained proposals that can be incrementally implemented and reviewed, but it's also good when proposals feel "complete" rather than leaving significant gaps in their design.
+
+== Alternatives considered
+
+Describe alternative approaches to addressing the same problem. This is an important part of most proposal documents. Reviewers are often familiar with other approaches prior to review and may have reasons to prefer them. This section is your first opportunity to try to convince them that your approach is the right one, and even if you don't fully succeed, you can help set the terms of the conversation and make the review a much more productive exchange of ideas.
+
+You should be fair about other proposals, but you do not have to be neutral; after all, you are specifically proposing something else. Describe any advantages these alternatives might have, but also be sure to explain the disadvantages that led you to prefer the approach in this proposal.
+
+You should update this section during the pitch phase to discuss any particularly interesting alternatives raised by the community. You do not need to list every idea raised during the pitch, just the ones you think raise points that are worth discussing. Of course, if you decide the alternative is more compelling than what's in the current proposal, you should change the main proposal; be sure to then discuss your previous proposal in this section and explain why the new idea is better.
+
+== Acknowledgements
+
+If significant changes or improvements suggested by members of the community were incorporated into the proposal as it developed, take a moment here to thank them for their contributions. Swift evolution is a collaborative process, and everyone's input should receive recognition!
+
+Generally, you should not acknowledge anyone who is listed as a co-author or as the review manager.
