@@ -1,0 +1,336 @@
+= Import Graph Anaylzer API
+
+* Proposal: xref:SPICE-0001-import-graph-analyzer-api.adoc[SPICE-0001]
+* Author: link:https://github.com/bioball[Dan Chao]
+* Status: TBD
+* Implemented in: TBD
+* Category: Tooling
+
+== Introduction
+
+Provide a way to produce a graph of imports required by Pkl modules.
+
+== Motivation
+
+Many build tools require that all inputs are known to them ahead of time, for cacheing purposes.
+
+For example, Gradle's `Task` API provides controls for file-based inputs. It uses these inputs to perform an _up-to-date check_. If the input files have not changed, it skips doing the actual work described by the task.
+
+In Pkl parlance, the inputs for any evaluation includes the dependent Pkl modules that are imported in the entrypoint program.
+Given the following program:
+
+.myFile.pkl
+[source,pkl]
+----
+import "otherFile.pkl"
+
+result = otherFile
+----
+
+The inputs for evaluation of `myFile.pkl` includes file `otherFile.pkl`.
+
+Currently, our link:https://pkl-lang.org/main/current/pkl-gradle[Gradle Plugin] requires _manual_ changes by developers to correctly configure their up-to-date checks.
+If their program adds another file for import, developers need to update the `transitiveModules` property to include this new file:
+
+.build.gradle.kts
+[source,diff]
+----
+ pkl {
+   evaluators {
+     register("evalPkl") {
+       sourceModules.set(files("myFile.pkl"))
++      transitiveModules.set(files("otherFile.pkl"))
+     }
+   }
+ }
+----
+
+This labor is tedious, and error-prone.
+If `otherFile.pkl` also has its own imports, those files need to be declared to the plugin.
+
+This type of up-to-date checking is common in other build tools. Examples:
+
+* Bazel
+* Make
+
+== Proposed Solution
+
+To address these pain points, a new API will be introduced to produce the set of imports required by an entrypoint Pkl module.
+
+The API is provided in multiple ways:
+
+1. As a CLI command: `pkl analyze imports`.
+2. As a Java API: `ImportAnalyzer`.
+3. As a Pkl standard library API: `pkl:analyze`.
+
+== Detailed Design
+
+=== What is an import?
+
+An import is either an amends/extends clause, an import clause/expression, or the result of a globbed import clause/expression.
+
+Globbed imports are not a single import, but rather, zero to many imports.
+These glob patterns are expanded into the resulting import list.
+
+Example:
+
+[source,pkl]
+----
+amends "OtherModule.pkl" // <1>
+
+import "path/to/somethingElse.pkl" // <2>
+import* "path/to/other/*.pkl" as otherModules // <3>
+
+res1 = import("some/other/module.pkl") // <4>
+
+res2 = import*("some/other/*.pkl") // <5>
+----
+<1> Amends clause
+<2> Import clause
+<3> Globbed import clause
+<4> Import expression
+<5> Globbed import expression
+
+=== CLI Command: `pkl analyze imports`
+
+A new command will be added to the CLI, called `pkl analyze imports`.
+
+Syntax:
+
+[source]
+----
+pkl analyze imports [-f,--format <format>] [--project-dir <path>] <moduleUri> [...moduleUri]
+----
+
+This command parses the provided source modules, and resolves all imported modules to their absolute URI.
+
+By default, the result is Pcf. Example:
+
+[source,shell]
+----
+pkl analyze imports myFile.pkl
+----
+
+Produces:
+[source]
+----
+imports {
+  ["file:///path/to/myFile.pkl"] {
+    "file:///path/to/otherFile.pkl"
+  }
+  ["file:///path/to/otherFile.pkl"] {}
+}
+resolvedUris {
+  ["file:///path/to/myFile.pkl"] = "file:///path/to/myFile.pkl"
+  ["file:///path/to/myFile.pkl"] = "file:///path/to/myFile.pkl"
+}
+----
+
+The value of the `imports` property is an object whose keys are module URIs, and whose values are the set of modules imported by the module referenced by the key.
+
+The set of all input modules in a program is the set of keys in the `imports` object.
+
+The value of `resolvedUris` is the mapping of in-language module URIs to those that Pkl uses to determine how to fetch the module's contents.
+For example, in the case of a link:https://pkl-lang.org/main/current/language-reference/index.html#local-dependencies[local dependency], an in-language URI might look like `projectpackage://example.com/foo@1.0.0#/mod.pkl`, and its resolved URI might look like `\file:///path/to/foo/mod.pkl`.
+
+The resolved URIs help build systems understand how resources map
+
+Underneath the hood, the command builds a synthetic module, that ultimately uses standard library module <<stdlib-module-pkl-analyze,pkl.analyze>> to produce output.
+
+==== `--format`, `-f`
+
+The `--format` (`-f` for short) flag sets the output format for this command.
+
+Examples:
+
+[source,shellscript]
+----
+# Evaluate as JSON
+$ pkl analyze imports -f json myFile.pkl
+
+# Evaluate as YAML
+$ pkl analyze imports -f yaml myFile.pkl
+----
+
+==== Common CLI flags
+
+This command recursively traverses the import graph.
+To support this, the set of flags from common evaluator settings are available:
+
+* `--allowed-modules`
+* `--allowed-resources`
+* `--cache-dir`
+* `--module-path`
+* `--project-dir`
+* `--ca-certificates`
+
+[[stdlib-module-pkl-analyze]]
+=== Standard library module `pkl:analyze`
+
+A new standard library module is introduced.
+It contains the class `ImportAnalyzer`, which provides import graph analysis.
+
+[source,pkl]
+----
+/// Utilities for static analysis of Pkl modules.
+///
+/// Unlike `pkl:reflect`, these methods do not require loading the modules for analysis.
+@ModuleInfo { minPklVersion = "0.26.0" }
+@Since { version = "0.26.0" }
+module pkl.analyze
+
+class ImportAnalyzer {
+  /// The modules to analyze for imports.
+  moduleUris: Listing<String>
+
+  /// The graph of imports declared by [moduleUris].
+  /// Each key-value pair is a module, corresponding with the set of modules
+  /// imported by that module.
+  ///
+  /// The set of all modules in the graph can be obtained via its keys.
+  external imports: Mapping<Uri, Listing<Uri>(isDistinct)>
+
+  /// Mappings of modules from their in-language URI, to the URI that is used to fetch the module's contents.
+  external resolvedUris: Mapping<Uri, Uri>(keys == imports.keys)
+}
+----
+
+The `ImportAnalyzer`  is the in-language representation of the `pkl anaylze imports` CLI command.
+
+=== Java API
+
+A Java-only API is introduced to perform actual analysis.
+
+Unlike the CLI, this API only parses a module, and does not involve the evaluator.
+
+[source,java]
+----
+public interface ImportAnalyzer {
+    Results analyze(List<ModuleSource> moduleSources);
+
+    interface Results {
+        Map<URI, Set<URI>> getImports();
+
+        Map<URI, URI> getResolvedUris();
+    }
+}
+
+----
+
+=== Example
+
+This Pkl file:
+
+./path/to/my/foo.pkl
+[source,pkl]
+----
+import "@bar/Bar.pkl" // <1>
+import "package://example.com/bar@1.0.0#/Bar.pkl" // <2>
+import "pkl:reflect" // <3>
+import "..." // <4>
+import* "subdir/*.pkl" <5>
+
+res = if (foo) import("foo1.pkl") else import("foo2.pkl") // <6>
+----
+<1> local dependency import of package://example.com/bar@1.0.0
+<2> direct package import
+<3> stdlib import
+<4> triple-dot import (resolves to /path/to/foo.pkl)
+<5> globbed import (resolves to /path/to/my/subdir/foo.pkl)
+<6> conditional import; both are added to the dependency graph
+
+Produces the following result:
+
+[source,pkl]
+----
+imports {
+  ["projectpackage://example.com/bar@1.0.0#/Bar.pkl"] {} // <1>
+  ["file:///foo/bar/Bar.pkl"] {}
+  ["package://example.com/bar@1.0.0#/Bar.pkl"] {}
+  ["pkl:reflect"] {
+    "pkl:base"
+  }
+  ["pkl:base"] {
+    "pkl:jsonnet"
+    "pkl:xml"
+    "pkl:protobuf"
+  }
+  ["pkl:jsonnet"] {}
+  ["pkl:xml"] {}
+  ["pkl:protobuf"] {
+    "pkl:reflect"
+  }
+  ["file:///path/to/foo.pkl"] {}
+  ["file:///path/to/my/foo1.pkl"] {}
+  ["file:///path/to/my/foo2.pkl"] {}
+  ["file:///path/to/my/subdir/foo.pkl"] {}
+}
+resolvedUris {
+  ["projectpackage://example.com/bar@1.0.0#/Bar.pkl"] = "file:///path/to/local/bar/Bar.pkl" // <2>
+  ["file:///foo/bar/Bar.pkl"] = "file:///foo/bar/bar.pkl" // <3>
+  ["package://example.com/bar@1.0.0#/Bar.pkl"] = "package://example.com/bar@1.0.0#/Bar.pkl" // <4>
+  ["pkl:reflect"] = "pkl:reflect"
+  ["pkl:jsonnet"] = "pkl:jsonnet"
+  ["pkl:xml"] = "pkl:xml"
+  ["pkl:protobuf"] = "pkl:protobuf"
+  ["file:///path/to/foo.pkl"] = "file:///path/to/foo.pkl"
+  ["file:///path/to/my/foo1.pkl"] = "file:///path/to/my/foo1.pkl"
+  ["file:///path/to/my/foo2.pkl"] = "file:///path/to/my/foo2.pkl"
+  ["file:///path/to/my/subdir/foo.pkl"] = "file:///path/to/my/subdir/foo.pkl"
+}
+----
+<1> dependency notation turns into `projectpackage://`.
+<2> local dependency's resolve URI is a local file.
+<3> module URIs that don't resolve to anything further stay the same.
+<4> package URIs stay the same.
+
+=== Gradle Plugin Changes
+
+The input files for various Pkl Gradle tasks will switch to using the Java `ImportAnalyzer` to build its input files.
+
+The set of input files will be `resolvedUris` whose keys start with `\file:///`.
+All other modules are assumed to be external to the machine and cache-able.
+
+The `transitiveModules` property is removed.
+
+== Future directions
+
+=== `pkl:anaylze` standard library module
+
+This is a starting point for the `pkl.analyze` stdlib module.
+Other forms of static analysis can be added to it as the need grows.
+
+=== Support in other language bindings
+
+This feature introduces `PklAnalyzer`, a new Java API that can analyze the imports of modules without requiring the evaluator.
+This is a capability that isn't being added to other language bindings.
+
+A simple workaround is to use the standard evaluator API, given the introduction of the new `pkl.anaylze` stdlib module, albeit with the drawback of the overhead of performing Pkl evaluation.
+
+To support evaluator-free analysis, a future improvement can be to add messages to the server API for performing import graph analysis.
+
+== Alternatives considered
+
+=== Enhance `pkl.reflect`
+
+One alternative is to enhance the `pkl.reflect` API to provide the import graph.
+
+Imagined API:
+
+[source,diff]
+----
+ module pkl.reflect
+
+ class Module {
++  /// The imports, extends, and amends declared by this module.
++  imports: Listing<Module>
+ }
+----
+
+The benefit of this approach is that an import can be defined in terms of regular Pkl evaluation.
+We do not need to provide a new CLI command, nor extension points in Gradle or server mode.
+
+Some drawbacks:
+
+* Reflection currently only provides information about a module's schema, using metadata that is already gathered when a module is initialized. Exposing this level of import requires that _data_ is also gathered during module initialization. This adds overhead to basic evaluation, even if the import graph is not needed.
+* Using `pkl:reflect` requires that Pkl initializes a module, which is much more expensive than just parsing it. Some modules are known to take seconds to initialize.
