@@ -2,16 +2,24 @@
 
 This repository hosts Suggested Pkl Improvement, Change, or Enhancements (SPICE) for improving the Pkl language, tooling, and ecosystem.
 
-== Status of pkl-evolution
-
 This repository serves two purposes:
 
 * To allow the Pkl language team to work on language changes and features.
 * To solicit and accept feedback from the Pkl community.
 
+== Contributing a SPICE
+
 Writing a SPICE is a lot of work.
 Avoid doing such work for nothing; if you would like to propose a SPICE, always start by submitting a topic to our xref:https://github.com/apple/pkl/discussions[discussions] forum.
 Once there is consensus there, a SPICE can be submitted.
+
+== Process
+
+The process for a SPICE is:
+
+1. The SPICE is authored, and submitted as a pull request.
+2. The pull request is reviewed, and either approved or rejected.
+3. The status of the SPICE is updated, and the pull request is merged.
 
 == Pkl language team
 
