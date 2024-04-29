@@ -10,7 +10,7 @@ This repository serves two purposes:
 == Contributing a SPICE
 
 Writing a SPICE is a lot of work.
-Avoid doing such work for nothing; if you would like to propose a SPICE, always start by submitting a topic to our xref:https://github.com/apple/pkl/discussions[discussions] forum.
+Avoid doing such work for nothing; if you would like to propose a SPICE, always start by submitting a topic to our link:https://github.com/apple/pkl/discussions[discussions] forum.
 Once there is consensus there, a SPICE can be submitted.
 
 == Process
@@ -25,9 +25,9 @@ The process for a SPICE is:
 
 The Pkl language team consists of (in alphabetical order):
 
-* Dan Chao (xref:https://github.com/bioball[@bioball])
-* Islon Scherer (xref:https://github.com/stackoverflow[@stackoverflow])
-* Philip Hölzenspies (xref:https://github.com/holzensp[@holzensp])
+* Dan Chao (link:https://github.com/bioball[@bioball])
+* Islon Scherer (link:https://github.com/stackoverflow[@stackoverflow])
+* Philip Hölzenspies (link:https://github.com/holzensp[@holzensp])
 
 == Credit
-This repository is modeled after xref:https://github.com/apple/swift-evolution[swift-evolution].
+This repository is modeled after link:https://github.com/apple/swift-evolution[swift-evolution].
