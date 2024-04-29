@@ -1,6 +1,6 @@
 = SPICE Name
 
-* Proposal: [SPICE-NNNN](./SPICE-NNNN-name-of-proposal.adoc)
+* Proposal: link:./SPICE-NNNN-name-of-proposal.adoc[SPICE-NNNN]
 * Status: Accepted or Rejected
 * Implemented in: Pkl <version>
 * Category: Language, Standard Library, Tooling
@@ -46,7 +46,7 @@ This is especially important when these future directions inform the design of t
 
 The rest of the proposal should generally not talk about future directions except by referring to this section.
 It is important not to confuse reviewers about what is covered by this specific proposal.
-If there's a larger vision that needs to be explained in order to understand this proposal, consider starting a discussion thread on the forums to capture your broader thoughts.
+If there's a larger vision that needs to be explained in order to understand this proposal, consider link:https://github.com/apple/pkl/discussions/new/choose[starting a discussion] to capture your broader thoughts.
 
 Avoid making affirmative statements in this section, such as "we will" or even "we should".
 Describe the proposals neutrally as possibilities to be considered in the future.
