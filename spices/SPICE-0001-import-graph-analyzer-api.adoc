@@ -195,7 +195,7 @@ class ImportAnalyzer {
 }
 ----
 
-The `ImportAnalyzer`  is the in-language representation of the `pkl anaylze imports` CLI command.
+The `ImportAnalyzer` is the in-language representation of the `pkl analyze imports` CLI command.
 
 === Java API
 
@@ -295,7 +295,7 @@ The `transitiveModules` property is removed.
 
 == Future directions
 
-=== `pkl:anaylze` standard library module
+=== `pkl:analyze` standard library module
 
 This is a starting point for the `pkl.analyze` stdlib module.
 Other forms of static analysis can be added to it as the need grows.
@@ -305,7 +305,7 @@ Other forms of static analysis can be added to it as the need grows.
 This feature introduces `PklAnalyzer`, a new Java API that can analyze the imports of modules without requiring the evaluator.
 This is a capability that isn't being added to other language bindings.
 
-A simple workaround is to use the standard evaluator API, given the introduction of the new `pkl.anaylze` stdlib module, albeit with the drawback of the overhead of performing Pkl evaluation.
+A simple workaround is to use the standard evaluator API, given the introduction of the new `pkl.analyze` stdlib module, albeit with the drawback of the overhead of performing Pkl evaluation.
 
 To support evaluator-free analysis, a future improvement can be to add messages to the server API for performing import graph analysis.
 
