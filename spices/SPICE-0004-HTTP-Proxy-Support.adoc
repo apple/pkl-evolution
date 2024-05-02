@@ -124,7 +124,7 @@ To support this, `HttpClient#Builder` receives two new builder methods:
 * `setProxySelector(java.net.ProxySelector proxySelector)`
 * `setProxy(URI proxyAddress, List<URI> noProxy)`
 
-The default builder receives `java.util.ProxySelector#getDefault`, which uses host proxy settings if one is set.
+The default builder receives `java.net.ProxySelector#getDefault`, which uses host proxy settings if one is set.
 This is the proxy selector that gets used by `EvaluatorBuilder#preconfigured`.
 
 `setProxy(URI proxyAddress, List<URI> noProxy)` sets a proxy selector that follows the noProxy rules described in <<noproxy>>,
