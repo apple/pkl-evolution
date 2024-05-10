@@ -63,7 +63,7 @@ To create these files, users are still expected to use standard tooling (CLI lin
 
 === Java bindings changes
 
-Class `org.pkl.core.Project` receives an additional static method `org.pkl.core.project.Project#load(org.pkl.core.ModuleSource)`, which spawns an evaluator, and lods the given `ModuleSource` as a `org.pkl.core.Project`.
+Class `org.pkl.core.Project` receives an additional static method `org.pkl.core.project.Project#load(org.pkl.core.ModuleSource)`, which spawns an evaluator, and loads the given `ModuleSource` as a `org.pkl.core.Project`.
 
 [source,java]
 ----
