@@ -1,0 +1,185 @@
+= Scheme-agnostic Projects
+
+* Proposal: link:./SPICE-0005-scheme-agnostic-projects.adoc[SPICE-0005]
+* Author: link:https://github.com/bioball[Dan Chao]
+* Status: TBD
+* Implemented in: TBD
+* Category: Language
+
+== Introduction
+
+This SPICE proposes a way to allow projects to be usable within modules that are not files.
+
+== Motivation
+
+A _project_ is a mechanism that allows users to manage dependencies, common evaluator settings, and create packages.
+
+Currently, a project is also restricted to the local filesystem.
+For example, it is not possible to tell Pkl that the project directory is `alternativescheme:/path/to/my/project`.
+
+This limitation is a pain-point in some circumstances.
+
+* When Pkl is embedded as a library in Java, it is common to embed Pkl modules as Java resources, and load them via link:https://pkl-lang.org/main/current/language-reference/index.html#module-path-uri[modulepath] URIs.
+* When Pkl is embedded in Go, it is common to embed Pkl files using an embedded filesystem `go:embed` directive, and passed to Pkl using the `pkl.WithFs` option.
+
+Because these URIs are not files, it is not possible to use any project features in either of these two scenarios.
+
+== Proposed Solution
+
+There are to main changes to be made:
+
+1. Instead of a "project directory", a project is identified by a base URI.
+2. Relative paths starting with `@` are _always_ treated as link:https://pkl-lang.org/main/current/language-reference/index.html#dependency-notation-uris[dependency notation], in all modules.
+
+== Detailed design
+
+=== Language-level dependency notation
+
+Currently, paths that are prefixed with `@` _only_ have special meaning if declared within file-based, or package-based modules.
+In these modules, this prefix is the marker of link:https://pkl-lang.org/main/current/language-reference/index.html#dependency-notation-uris[dependency notation].
+In all other modules, this symbol has no special meaning.
+For example, in module `modulepath:/foo.pkl`, the import `@bar/bar.pkl` is resolved as `modulepath:/@bar/bar.pkl`.
+
+This behavior conflicts with the ability to import dependencies from non-file-based modules.
+
+To support this feature, the `@` prefix is changed to a language level resolution rule.
+
+To resolve dependency notation, Pkl follows these rules:
+
+1. If the module's scheme is `package` or `projectpackage`, resolve as the package's dependency, following today's rules (skip steps 2 and onwards).
+2. If there is no project base URI, throw an error.
+3. If the module's URI is not within the project base URI, throw an error. This can never be true if the module's URI does not have hierarchical paths.
+4. Resolve to a project dependency associated with the dependency notation simple name.
+
+=== Resolving `PklProject.deps.json`
+
+When resolving a project's dependencies, Pkl will look for a file called `PklProject.deps.json` that is a sibling of the `PklProject` file.
+Currently, this is done as a simple file read.
+
+To accomodate arbitrary URI schemes, Pkl will treat this as a module read.
+Evaluating with project base URI `modulepath:/foo/bar` means that Pkl will read `modulepath:/foo/bar/PklProject.deps.json` through the `ModuleKey` API in Java, and the link:https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html#read-module-request[Read Module Request] message when using the message passing API.
+
+To create these files, users are still expected to use standard tooling (CLI link:https://pkl-lang.org/main/current/pkl-cli/index.html#command-project-resolve[pkl project resolve], or the link:https://pkl-lang.org/main/current/pkl-gradle/index.html#project-resolving[Gradle project resolver task]).
+
+=== Java bindings changes
+
+Class `org.pkl.core.Project` receives an additional static method `org.pkl.core.project.Project#load(org.pkl.core.ModuleSource)`, which spawns an evaluator, and lods the given `ModuleSource` as a `org.pkl.core.Project`.
+
+[source,java]
+----
+class Project {
+  public static Project load(ModuleSource moduleSource);
+}
+----
+
+Users of `modulepath`-based projects can configure their evaluator like so:
+
+[source,java]
+----
+// Set the project directory as a classpath directory by loading it as a ModuleSource.classPath
+var project = Project.load(ModuleSource.classPath("/com/example/pkl/PklProject"));
+
+var evaluator = EvaluatorBuilder.preconfigured().setProjectDependencies(project.getDependencies()).build();
+
+// or for users of ConfigEvaluator:
+var configEvaluator = ConfigEvaluatorBuilder.preconfigured().setProjectDependencies(project.getDependencies()).build();
+----
+
+=== Message Passing API
+
+The message passing API does not receive any changes.
+
+[[client-library-changes]]
+=== pkl-go, pkl-swift Changes
+
+In projects pkl-go and pkl-swift, the `projectDir` property is changed to `projectBaseUri`.
+
+In addition, their respective `Project` interfaces receive a mechanism to load from a `ModuleSource`.
+
+=== `pkl.Project` standard library changes
+
+Some fields within `Project.pkl` are meant for interaction with the Pkl CLI.
+For example, `EvaluatorSettings.modulePath` is meant to be a list of files on the local filesystem that determines the program's `modulepath:`.
+
+The values for these fields are _paths_ for the local filesystem.
+In the regular scenario, relative paths are interpreted as relative to the enclosing PklProject file.
+This does not translate if the enclosing PklProject is not a `file:`-based module in the first place.
+
+The properties are invalid if the project is not a `file:`-local URI:
+
+* link:https://pkl-lang.org/package-docs/pkl/current/Project/EvaluatorSettings.html#modulePath[EvaluatorSettings.modulePath]
+* link:https://pkl-lang.org/package-docs/pkl/current/Project/EvaluatorSettings.html#moduleCacheDir[EvaluatorSettings.moduleCacheDir]
+* link:https://pkl-lang.org/package-docs/pkl/current/Project/EvaluatorSettings.html#moduleCacheDir[EvaluatorSettings.rootDir]
+
+These fields receive a new type constraint.
+
+[source,groovy]
+----
+local isFileBasedProject = projectFileUri.startsWith("file:")
+
+evaluatorSettings: EvaluatorSettings(
+  (modulePath != null).implies(isFileBasedProject),
+  (rootDir != null).implies(isFileBasedProject),
+  (moduleCacheDir != null).implies(isFileBasedProject)
+)
+----
+
+=== Local Dependencies
+
+A project can optionally have link:https://pkl-lang.org/main/current/language-reference/index.html#local-dependencies[local dependencies].
+During import, they are resolved from a URI that is local to the project base URI.
+
+Local dependencies, from the perspective of the declared module, are just packages, and packages can be globbed.
+However, the resolved URI might not be globbable.
+This is the case for `modulepath:` modules.
+In these situations, an error is thrown.
+
+[source,pkl]
+----
+import* "@localProject/*.pkl"
+----
+
+Throws error:
+
+[source,text]
+----
+-- Pkl Error --
+Cannot expand glob pattern "@localProject/*.pkl" because scheme `modulepath:` is not globbable.
+----
+
+== Compatibility
+
+=== Language changes
+
+Relative path imports starting with `@` will break.
+
+Practically speaking, this isn't expected to have much of an impact; `@`-prefixed paths are well understood to be dependencies.
+
+=== Library changes
+
+The pkl-swift and pkl-go have breaking changes as detailed in <<client-library-changes>>.
+
+== Future directions
+
+N/A
+
+== Alternatives considered
+
+=== Reading `PklProject.deps.json`
+
+In order to read the `PklProject.deps.json` file, two other approaches were considered:
+
+The first was to use the resource reader API.
+This is consistent with the fact that this is not a Pkl module, and a regular resource might be the more natural classification.
+However:
+
+1. Module readers and resource readers both represent in-language operations (`import` and `read` respectively), and reading `PklProject.deps.json` is not an out-of-band operation. It is not necessarily more honest to call this a "resource read".
+2. It requires that users configure an evaluator with an additional resource reader that might not have any bearing `read()` calls.
+3. The module reader is already a necessary part of the evaluator's configuration.
+
+Another option was to register an additional extension point. For example, to introduce a new message passing request/response pair.
+However, this adds to the API surface area, and the operation is essentially what a module or resource reader can already do.
+
+== Acknowledgements
+
+Credit to link:https://github.com/HT154[Joshua Basch], for doing most of the work, and providing an already working implementation to start from!
