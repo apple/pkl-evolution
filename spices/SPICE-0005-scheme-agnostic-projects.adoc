@@ -173,8 +173,8 @@ The first was to use the resource reader API.
 This is consistent with the fact that this is not a Pkl module, and a regular resource might be the more natural classification.
 However:
 
-1. Module readers and resource readers both represent in-language operations (`import` and `read` respectively), and reading `PklProject.deps.json` is not an out-of-band operation. It is not necessarily more honest to call this a "resource read".
-2. It requires that users configure an evaluator with an additional resource reader that might not have any bearing `read()` calls.
+1. Module readers and resource readers both represent in-language operations (`import` and `read` respectively), and reading `PklProject.deps.json` is not an in-language operation. It is not necessarily more honest to call this a "resource read".
+2. It requires that users configure an evaluator with an additional resource reader, which might not have any bearing for `read()` calls.
 3. The module reader is already a necessary part of the evaluator's configuration.
 
 Another option was to register an additional extension point. For example, to introduce a new message passing request/response pair.
