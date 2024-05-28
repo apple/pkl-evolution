@@ -1,6 +1,6 @@
-= File paths on Windows
+= Import paths on Windows
 
-* Proposal: link:./SPICE-0006-file-paths-on-windows.adoc[SPICE-0006]
+* Proposal: link:./SPICE-0006-import-paths-on-windows.adoc[SPICE-0006]
 * Status: TBD
 * Implemented in: TBD
 * Category: Language
@@ -120,6 +120,8 @@ import "@uri/uri.pkl"
 To improve scripts that <<reading-off-pwd,read off `PWD`>>, Pkl can provide an API to provide the current working directory that is platform independent.
 
 This might require a new standard library module.
+
+Possibly, the working directory can be implemented in terms of a path API.
 
 == Alternatives considered
 
