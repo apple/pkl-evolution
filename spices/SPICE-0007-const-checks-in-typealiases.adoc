@@ -22,7 +22,7 @@ Here is a module that defines a typealias which a typecheck will always pass:
 .module1.pkl
 [source,groovy]
 ----
-typealias MyValue = Any(isValid) // expands to `this.length == myLength`
+typealias MyValue = Any(isValid)
 
 isValid = true
 ----
@@ -51,12 +51,12 @@ value2: module2.MyValue // never passes
 ----
 
 Note: in version 0.25, this actually does not work because of a scoping problem.
-This bug and was partially fixed by https://github.com/apple/pkl/pull/144[#144].
+This bug was partially fixed by https://github.com/apple/pkl/pull/144[#144].
 
 This is inconsistent with the principle set by classes.
 We do not allow the meaning of a class to change by amending its enclosing module.
 This is done by enforcing that any references outside its class body must be `const`.
-If `module1.MyValue` was a class instead of a typealias, it should not be impossible for `module2.MyValue` to behave differently.
+If `module1.MyValue` was a class instead of a typealias, it should be impossible for `module2.MyValue` to behave differently.
 
 == Proposed Solution/Detailed Design
 
@@ -84,7 +84,7 @@ Cannot reference `isValid` from here because it is not `const`.
 == Compatibility
 
 This is a breaking change.
-If typealiases references module-level properties, those properties must be marked `const` to be compatible.
+If typealiases reference module-level properties, those properties must be marked `const` to be compatible.
 This means that there will be Pkl code that is incompatible, and need to be updated to keep working.
 
 [source,diff]
