@@ -2,8 +2,8 @@
 
 * Proposal: xref:SPICE-0003-windows-safe-paths.adoc[SPICE-0003]
 * Author: link:https://github.com/bioball[Dan Chao]
-* Status: TBD
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: Pkl 0.26
 * Category: Language
 
 == Introduction
@@ -13,9 +13,10 @@ In order to support running Pkl on Windows, filepaths are encoded to be compatib
 == Motivation
 
 Currently, Pkl is only supported for macOS and Linux.
-On these operating systems, the only character reserved in filepaths is `/` (the directory separator).
+On these operating systems, the only characters reserved in filepaths are `0x0` (null byte), and `/` (the directory separator).
 
 On Windows, the characters `<`, `>`, `:`, `"`, `\`, `|`, `?`, and `*` are also reserved.
+Additionally, character code points `0x1` through `0x1f` are also illegal.
 
 In situations where filepaths are written to disk, operations to write filepaths that contain these characters will either fail or have otherwise unexpected behavior.
 
