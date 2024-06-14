@@ -2,8 +2,8 @@
 
 * Proposal: link:./SPICE-0007-const-checks-in-typealiases.adoc[SPICE-0007]
 * Author: https://github.com/bioball[Dan Chao]
-* Status: TBD
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: Pkl 0.26
 * Category: Language
 
 == Introduction
@@ -20,7 +20,7 @@ Currently, there is no restriction on what can be referenced.
 Here is a module that defines a typealias which a typecheck will always pass:
 
 .module1.pkl
-[source,groovy]
+[source,pkl]
 ----
 typealias MyValue = Any(isValid)
 
@@ -31,7 +31,7 @@ The meaning of `MyValue` can be changed by an amending module.
 In this module, `MyValue` is changed to a typecheck that will always fail.
 
 .module2.pkl
-[source,groovy]
+[source,pkl]
 ----
 amends "module1.pkl"
 
@@ -41,7 +41,7 @@ isValid = false
 Following this further, this should mean that `module1.MyValue` defined a _different type_ than `module2.MyValue`.
 
 .module3.pkl
-[source,groovy]
+[source,pkl]
 ----
 import "module1.pkl"
 import "module2.pkl"
@@ -64,7 +64,7 @@ To follow the same principle, a new rule will be introduced, that any references
 This is the same rule that already exists for references from inside class bodies.
 
 .module1.pkl
-[source,groovy]
+[source,pkl]
 ----
 typealias MyValue = Any(isValid)
 
@@ -140,7 +140,7 @@ Instead of typealiases being statically defined, they are defined per module ame
 
 Additionally, it's unclear what to do if the module is amended as an object.
 
-[source,groovy]
+[source,pkl]
 ----
 import "module1.pkl"
 
