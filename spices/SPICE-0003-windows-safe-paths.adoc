@@ -1,0 +1,138 @@
+= Windows Safe Paths
+
+* Proposal: xref:SPICE-0003-windows-safe-paths.adoc[SPICE-0003]
+* Author: link:https://github.com/bioball[Dan Chao]
+* Status: Accepted
+* Implemented in: Pkl 0.26
+* Category: Language
+
+== Introduction
+
+In order to support running Pkl on Windows, filepaths are encoded to be compatible on Windows operating systems.
+
+== Motivation
+
+Currently, Pkl is only supported for macOS and Linux.
+On these operating systems, the only characters reserved in filepaths are `0x0` (null byte), and `/` (the directory separator).
+
+On Windows, the characters `<`, `>`, `:`, `"`, `\`, `|`, `?`, and `*` are also reserved.
+Additionally, character code points `0x1` through `0x1f` are also illegal.
+
+In situations where filepaths are written to disk, operations to write filepaths that contain these characters will either fail or have otherwise unexpected behavior.
+
+== Proposed Solution
+
+In order to be compatible with Windows, filepaths will be encoded to be compatible with Windows.
+
+These are the situations where Pkl will write encoded paths to disk:
+
+1. Writing packages to the cache directory, when using `--cache-dir` or when using the default cache dir.
+2. Creating documentation via `pkldoc`, or the `pkl-doc` Java library.
+3. Generating Kotlin code through `pkl-codegen-kotlin`.
+
+NOTE: Java identifiers cannot use any of the reserved Windows characters, so we do not need to change the behavior of `pkl-codegen-java`.
+
+=== Files written from `pkl eval` are not escaped
+
+Pkl will _not_ write encoded filepaths during regular evaluation.
+When executing `pkl eval -o "foo:bar" myModule.pkl` on Windows, Pkl will attempt to write a filename called `foo:bar`, the I/O error is bubbled up to the user.
+
+Additionally, the paths specified within `output.files` when using link:https://pkl-lang.org/main/current/language-reference/index.html#multiple-file-output[multiple-file output] will be written verbatim without escaping, and any I/O errors are bubbled up to the user.
+
+These paths are not encoded because:
+
+1. They are user-specified. +
+It can be a confusing experience if `pkl eval -o foo:bar` produced a _different_ filename on operating systems where this is supported.
+It can also be a confusing experience if Pkl behaved differently on different operating systems.
+2. It preserves compatiblity with current Pkl.
+
+== Detailed design
+
+=== Filename encoding
+
+Characters that aren't safe on Windows are encoded by enclosing their hexadecimal character code in parentheses.
+
+The open parenthesis literal `(` is encoded as `((`.
+
+Examples:
+
+|===
+|Verbatim |Encoded
+
+|`foo:bar`
+|`foo(3a)bar`
+
+|`foo<bar`
+|`foo(3c)bar`
+
+|`foo(3a)bar`
+|`foo((3a)bar`
+
+|`((((`
+|`((((((((`
+
+|illegal
+|`foo(`
+
+|illegal
+|`foo()bar`
+
+|illegal
+|`foo(az)bar`
+|===
+
+The closing delimiter `)` future-proofs the possibility of needing to encode characters that can't be expressed with only two hex characters.
+
+=== Package Cache: `package-2`
+
+Cached packages will be written to a new subdirectory called `package-2` within the user-specified cache directory.
+
+This prevents possibility of conflicts.
+For example, this prevents an issue where the current version of Pkl and newer versions of Pkl might use the same cache location for different packages called `package://example.com/foo(3a)bar`, and `package://example.com/foo:bar`.
+
+The package `package://example.com/foo:bar` will be written to directory `package-2/example.com/foo(3a)bar`.
+
+=== Prior art
+
+Kotlin's Dokka encodes Windows-unsafe characters with the decimal character code, enclosed with square brackets.
+
+A class called `class `Foo:bar`` creates a file called `Foo[58]bar.html`.
+However, this encoding uses characters that are not URI-safe, resulting in more bytes when representing them in URLs (`Foo%5B58%5Dbar.html`), and subjectively, less aesthetically pleasing URIs.
+
+== Compatibility
+
+This proposal is backwards compatibility for evaluation. However, it does mean that the cache directory needs to be re-populated.
+
+This proposal will change existing links for pkldoc websites. A Pkl class called `Foo:bar` will need to have any links updated from `Foo:bar.html` to `Foo(3c)bar.html`.
+
+== Future directions
+
+N/A
+
+== Alternatives considered
+
+The encoding described here is a _new_ encoding protocol.
+Other encoding protocols considered are HTML character entity encoding, and percent encoding.
+
+The drawback of these encoding is that they use characters that are not URI-safe.
+In order to represent them as URIs, they are doubly encoded.
+
+|===
+| encoding name | verbatim | local path | URI path
+
+| percent
+| `foo:bar`
+| `foo%3Cbar`
+| `foo%253Cbar`
+
+| HTML character entity
+| `foo:bar`
+| `foo\&#58;bar`
+| `foo%26%2358%3Bbar`
+|===
+
+Percent-encoding results in five URI bytes to represent the colon literal.
+HTML character entity encoding results in eleven URI bytes to represent the colon literal.
+
+Additionally, using percent-encoding can make implementations more challenging, because it is hard to determine whether a character has already been encoded or not when creating HTML links.
+
