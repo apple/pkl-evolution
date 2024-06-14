@@ -1,8 +1,8 @@
 = Import paths on Windows
 
 * Proposal: link:./SPICE-0006-import-paths-on-windows.adoc[SPICE-0006]
-* Status: TBD
-* Implemented in: TBD
+* Status: Acceptedd
+* Implemented in: Pkl 0.26
 * Category: Language
 
 == Introduction
@@ -19,7 +19,7 @@ In order to maintain compatibility with existing Pkl programs, and maximize cros
 
 Relative paths that contain `\` are treated as unresolvable on Windows.
 
-[source,groovy]
+[source,pkl]
 ----
 import "foo\\bar.pkl"
 ----
@@ -52,7 +52,7 @@ The `/` character is also accepted as a directory separator, which aligns with t
 The `\` character is treated as the name of a file or directory, and will throw on Windows.
 
 .foo.pkl
-[source,groovy]
+[source,pkl]
 ----
 output {
   files {
@@ -90,7 +90,7 @@ Some "script" type modules read env var `PWD`, as a way to read relative paths.
 These scripts will not work as-is on Windows, because the `PWD` env var is a Windows-style path string like `C:\foo\bar\baz.pkl`.
 
 Sample script today:
-[source,gropvy]
+[source,pkl]
 ----
 import "@uri/uri.pkl" // <1>
 
