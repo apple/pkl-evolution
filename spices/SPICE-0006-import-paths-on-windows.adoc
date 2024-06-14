@@ -1,0 +1,146 @@
+= Import paths on Windows
+
+* Proposal: link:./SPICE-0006-import-paths-on-windows.adoc[SPICE-0006]
+* Status: Acceptedd
+* Implemented in: Pkl 0.26
+* Category: Language
+
+== Introduction
+
+On Windows, relative paths will use the `/` character as the filepath separator.
+
+== Detailed Design
+
+The Windows filesystem uses `\` as the filepath separator, whereas POSIX-based OSes (macOS/Linux) use `/` as the filepath separator.
+
+Pkl follows the POSIX approach, where paths are separated with `/`.
+
+In order to maintain compatibility with existing Pkl programs, and maximize cross-platform support, Pkl on Windows will continue to use the `/` filepath separator.
+
+Relative paths that contain `\` are treated as unresolvable on Windows.
+
+[source,pkl]
+----
+import "foo\\bar.pkl"
+----
+
+Throws:
+
+[source]
+----
+-- Pkl Error --
+Cannot find module `file:///C:/path/to/foo%5Cbar.pkl`
+----
+
+=== CLI arguments
+
+This rule affects _in-language_ paths.
+File path arguments passed to the CLI accept `\` as the file separator on Windows.
+
+The following commands on Windows are accepted.
+
+[source]
+----
+pkl eval foo\bar\baz.pkl
+pkl eval C:\foo\bar\baz.pkl
+----
+
+The `/` character is also accepted as a directory separator, which aligns with tools like PowerShell, git, bash.exe.
+
+=== Multiple-file output
+
+The `\` character is treated as the name of a file or directory, and will throw on Windows.
+
+.foo.pkl
+[source,pkl]
+----
+output {
+  files {
+    ["foo\\bar.yml"] { text = "foo: bar" }
+  }
+}
+----
+
+And:
+
+[source,shell]
+----
+pkl eval -m . foo.pkl
+----
+
+Results in:
+
+[source]
+----
+-- Pkl Error --
+Path spec `foo\bar.yml` contains illegal character `\`.
+----
+
+== Compatibility
+
+Since Windows support is a new feature, there are no breaking changes for existing use-cases.
+
+However, some Pkl programs will need to be adjusted to support Windows.
+
+[[reading-off-pwd]]
+=== Pkl modules that `read` off PWD
+
+Some "script" type modules read env var `PWD`, as a way to read relative paths.
+
+These scripts will not work as-is on Windows, because the `PWD` env var is a Windows-style path string like `C:\foo\bar\baz.pkl`.
+
+Sample script today:
+[source,pkl]
+----
+import "@uri/uri.pkl" // <1>
+
+local pwd = read("env:PWD")
+fileContents = read("\(uri.encode(pwd))/foo.json")
+----
+<1> Module link:https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-pantry/pkl.experimental.uri/current/index.html[pkl.experimental.uri]
+
+These scripts are not Windows-compatible, and will need to be adjusted.
+
+Sample adjustment:
+
+[source,diff]
+----
+import "@uri/uri.pkl"
+
+ local pwd = read("env:PWD")
++local pwdAdjusted = if (pwd.startsWith(Regex("\w:")) pwd.replaceAll("\\", "/") else pwd
+-fileContents = read("\(pwd)/foo.json")
++fileContents = read("file:///\(uri.encode(pwdAdjusted))/foo.json")
+----
+
+== Future directions
+
+=== Current working directory API
+
+To improve scripts that <<reading-off-pwd,read off `PWD`>>, Pkl can provide an API to provide the current working directory that is platform independent.
+
+This might require a new standard library module.
+
+Possibly, the working directory can be implemented in terms of a path API.
+
+== Alternatives considered
+
+=== Allow both `\` and `/` as path separators
+
+Some tools allow both `\` and `/` as separators when running on Windows for better interop between different OSes.
+For example, the following code is valid Java when run on Windows:
+
+[source,java]
+----
+var file = Path.of("/foo/bar/baz");
+var file2 = Path.of("\\foo\\bar\\baz");
+
+assert(file.equals(file2));
+----
+
+There are two drawbacks:
+
+1. Such code is not portable between Windows and other OSes. On a POSIX-based file system, the `\` character is a filename character.
+2. The `\` character conflicts with the escape character in a glob expression. +
++
+The expression `import*(#"\foo\*"#)` fails, because `\f` and `\*` are (invalid) escape sequences.
