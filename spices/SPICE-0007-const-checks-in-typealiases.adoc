@@ -1,0 +1,153 @@
+= Const checks in typealiases
+
+* Proposal: link:./SPICE-0007-const-checks-in-typealiases.adoc[SPICE-0007]
+* Author: https://github.com/bioball[Dan Chao]
+* Status: Accepted
+* Implemented in: Pkl 0.26
+* Category: Language
+
+== Introduction
+
+This SPICE proposes a new requirement that references from a typealias body must be `const`.
+
+[[motivation]]
+== Motivation
+
+Typealias bodies may contain constraints, where these constraints may reference values _outside_ of the typealias body's.
+
+Currently, there is no restriction on what can be referenced.
+
+Here is a module that defines a typealias which a typecheck will always pass:
+
+.module1.pkl
+[source,pkl]
+----
+typealias MyValue = Any(isValid)
+
+isValid = true
+----
+
+The meaning of `MyValue` can be changed by an amending module.
+In this module, `MyValue` is changed to a typecheck that will always fail.
+
+.module2.pkl
+[source,pkl]
+----
+amends "module1.pkl"
+
+isValid = false
+----
+
+Following this further, this should mean that `module1.MyValue` defined a _different type_ than `module2.MyValue`.
+
+.module3.pkl
+[source,pkl]
+----
+import "module1.pkl"
+import "module2.pkl"
+
+value1: module1.MyValue // always passes
+value2: module2.MyValue // never passes
+----
+
+Note: in version 0.25, this actually does not work because of a scoping problem.
+This bug was partially fixed by https://github.com/apple/pkl/pull/144[#144].
+
+This is inconsistent with the principle set by classes.
+We do not allow the meaning of a class to change by amending its enclosing module.
+This is done by enforcing that any references outside its class body must be `const`.
+If `module1.MyValue` was a class instead of a typealias, it should be impossible for `module2.MyValue` to behave differently.
+
+== Proposed Solution/Detailed Design
+
+To follow the same principle, a new rule will be introduced, that any references from a typealias body must also be `const`.
+This is the same rule that already exists for references from inside class bodies.
+
+.module1.pkl
+[source,pkl]
+----
+typealias MyValue = Any(isValid)
+
+isValid = true
+----
+
+This should produce the following error:
+
+[source]
+----
+-- Pkl Error --
+Cannot reference `isValid` from here because it is not `const`.
+1 | typealias MyValue = Any(isValid)
+                            ^^^^^^^
+----
+
+== Compatibility
+
+This is a breaking change.
+If typealiases reference module-level properties, those properties must be marked `const` to be compatible.
+This means that there will be Pkl code that is incompatible, and need to be updated to keep working.
+
+[source,diff]
+----
+ typealias MyValue = Any(isValid)
+
+-isValid = true
++const isValid = true
+----
+
+== Future directions
+
+N/A
+
+== Alternatives considered
+
+The alternative here is to allow references within typealiases to be late-bound.
+This alternative is explored in https://github.com/apple/pkl/pull/510[#510].
+
+In this proposal, Pkl follows the behavior outlined in the <<motivation>> section of this SPICE.
+As already detailed, this means that a _type_ can be changed by amending its enclosing module.
+Furthermore, two new language changes are required:
+
+1. The identity of a runtime typealias value should also be changed when referenced from an amending module, because they represent different type checks.
+2. Classes can only use a typealias if the typealias body does not reference a const value.
+
+[source,pkl]
+----
+import "module1.pkl"
+import "module2.pkl"
+
+value1: module1.MyValue // always passes
+value2: module2.MyValue // never passes
+
+areEqual = module1.MyValue == module2.MyValue // false
+
+class MyClass {
+  prop1: module1.MyValue // Error, cannot use type `module1.MyValue` because it references a non-const value
+  prop2: TypeAlias = module1.MyValue // Error, cannot reference typealias `module1.MyValue` because it references a non-const value
+}
+----
+
+The benefits of this approach are that typealiases are more powerful.
+It makes it possible to define multiple typealiases that are related to each other by simply amending the enclosing module.
+It also allows module authors to replace module-level property types with typealiases as-is.
+
+The core problem with this approach is that it breaks the principle that a type cannot be changed by way of object amending.
+The implications behind this are that the meaning of a type is more complicated.
+To understand what a type means, it is not enough to look at the declaration site of the typealias; it is also important to know where the typealias is referenced from.
+
+Another problem is that this behavior adds more time and space complexity to the language runtime.
+Instead of typealiases being statically defined, they are defined per module amend.
+
+Additionally, it's unclear what to do if the module is amended as an object.
+
+[source,pkl]
+----
+import "module1.pkl"
+
+// myObj now has its own synthetic `MyValue` typealias. But how do you reference it?
+myObj = (module1) { isValid = false }
+----
+
+Practically speaking, only a small amount of Pkl code was observed to be breaking this rule.
+The violations of this rule that we found were modules that reference `local` members, where these typealiases don't rely on late binding anyway, and can easily be updated to `const local`.
+The benefit of being "more powerful" isn't observed to be useful in real-world Pkl code.
