@@ -1,0 +1,229 @@
+// suppress inspection "HttpUrlsUsage" for whole file
+= HTTP Proxy Support
+
+* Proposal: link:./SPICE-0004-HTTP-Proxy-Support.adoc[SPICE-0004]
+* Author: link:https://github.com/bioball[Dan Chao]
+* Status: Accepted
+* Implemented in: Pkl 0.26
+* Category: Language, Standard Library
+
+== Introduction
+
+This SPICE describes support for HTTP proxying.
+
+== Motivation
+
+Some environments do not allow direct connections to the internet, instead requiring that connections go through an intermediary proxy.
+
+To enable Pkl in these situations, this SPICE provides a way to redirect outbound requests through said proxies.
+
+== Proposed Solution
+
+Pkl will support HTTP proxies.
+Proxy settings will be added, and this will control how Pkl makes HTTP requests.
+
+== Detailed design
+
+=== Configuring proxies
+
+A proxy can be set via the following, in order of precedence (least to greatest):
+
+. System (OS) proxy settings
+. `~/.pkl/settings` file
+. `PklProject` file (in `evaluatorSettings`)
+. CLI Flags/pkl-gradle options/`HttpClient#Builder`/server mode message passing API
+
+The two proxy configuration values (<<_address>>, <<noproxy>>) are individually determined.
+For example, setting the `--http-proxy` flag in the CLI but not the `--http-no-proxy` flag will cause Pkl to look up the chain for noproxy values.
+
+The exception here is: if the proxy address is set, any noproxy settings set on the system level are ignored.
+
+==== Environment Variables
+
+Proxies will _not_ be configured via environment variables.
+This maintains consistency with the rest of Pkl; it does not support using environment variables for any other configuration.
+Additionally, while other languages might use environment variables, they have slightly different meaning from one language to another (see link:https://about.gitlab.com/blog/2021/01/27/we-need-to-talk-no-proxy[]]).
+Not using environment variables avoids a possble problem where the same environment variable influences both Pkl and another runtime, but in different ways.
+
+==== Settings file
+
+A new `proxy` property is added to the global settings file.
+
+[source,pkl]
+----
+module pkl.settings
+
+import "pkl:EvaluatorSettings"
+
+/// HTTP proxy settings.
+@Since { version = "0.26.0" }
+http: EvaluatorSettings.Http?
+----
+
+==== `EvaluatorSettings`
+
+Class `EvaluatorSettings` is moved out of `pkl.Project` and into its own module, and a new property `http` is added.
+
+The existing class is replaced with a (deprecated) typealias.
+
+.pkl:Project
+[source,pkl]
+----
+import "pkl:EvaluatorSettings" as EvaluatorSettingsModule
+
+@Deprecated { since = "0.26.0" }
+typealias EvaluatorSettings = EvaluatorSettingsModule
+----
+
+.pkl:EvaluatorSettings
+[source,pkl]
+----
+@Since { version = "0.26.0" }
+module pkl.EvaluatorSettings
+
+// ... rest of evaluator settings
+
+/// Configuration of outgoing HTTP requests.
+http: Http?
+
+/// Settings that control how Pkl talks to HTTP(S) servers.
+class Http {
+  /// Configuration of the HTTP proxy to use.
+  proxy: Proxy?
+}
+
+/// Settings that control how Pkl talks to HTTP proxies.
+class Proxy {
+  /// The proxy to use for HTTP(S) connections.
+  ///
+  /// Only HTTP proxies are supported.
+  /// The proxy address must start with `http://`, and can only contain a host and a port.
+  /// If a port is omitted, it defaults to port `80`.
+  ///
+  /// Proxy authentication is not supported.
+  ///
+  /// Example:
+  /// ```
+  /// address = "http://my.proxy.example.com:5080"
+  /// ```
+  address: Uri(startsWith("http://"))?
+
+  /// Hosts to which all connections should bypass a proxy.
+  ///
+  /// Values can be either hostnames, or IP addresses.
+  /// IP addresses can optionally be provided using
+  /// [CIDR notation](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing#CIDR_notation).
+  ///
+  /// The value `"*"` is a wildcard that disables proxying for all hosts.
+  ///
+  /// A hostname matches all subdomains.
+  /// For example, `example.com` matches `foo.example.com`, but not `fooexample.com`.
+  /// A hostname that is prefixed with a dot matches the hostname itself,
+  /// so `.example.com` matches `example.com`.
+  ///
+  /// Hostnames do not match their resolved IP addresses.
+  /// For example, the hostname `localhost` will not match `127.0.0.1`.
+  ///
+  /// Optionally, a port can be specified.
+  /// If a port is omitted, all ports are matched.
+  ///
+  /// Example:
+  ///
+  /// ```
+  /// noProxy {
+  ///   "127.0.0.1"
+  ///   "169.254.0.0/16"
+  ///   "example.com"
+  ///   "localhost:5050"
+  /// }
+  /// ```
+  noProxy: Listing<String>(isDistinct)
+}
+----
+
+==== CLI flags
+
+The following CLI flags are added to common CLI options:
+
+* `--http-proxy` -- A proxy URL to connect to
+* `--http-no-proxy` -- A comma-separated list of hosts to not proxy.
+
+==== pkl-gradle
+
+The following options are added to the common options for `PklSpec`:
+
+* `httpProxy: Property<String>`
+* `httpNoProxy: ListProperty<String>`
+
+==== `HttpClient#Builder`
+
+When Pkl is embedded with in Java, it is preferrable to use the host's proxy settings if possible.
+When Pkl is run standalone, the proxy should be configued via user-facing means.
+
+To support this, `HttpClient#Builder` receives two new builder methods:
+
+* `setProxySelector(java.net.ProxySelector proxySelector)`
+* `setProxy(@Nullable URI proxyAddress, List<URI> noProxy)`
+
+The default builder receives `java.net.ProxySelector#getDefault`, which uses host proxy settings if one is set, and defaults to system settings otherwise.
+This is the proxy selector that gets used by `EvaluatorBuilder#preconfigured`.
+
+`setProxy(@Nullable URI proxyAddress, List<URI> noProxy)` sets a proxy selector that follows the noProxy rules described in <<noproxy>>,
+and is what the CLI, Gradle, and message passing API use.
+
+=== Proxy Configuration Values
+
+There are two values to configure for proxying:
+
+==== Address
+
+The proxy address specifies the proxy host, protocol, and optional port.
+It takes the form of a standard URL. For example:
+
+[source,text]
+----
+"http://my.proxy.com:8080"
+----
+
+The scheme _must_ be `http`.
+
+[[noproxy]]
+==== Noproxy
+
+The noproxy value follows the specification outlined in link:https://about.gitlab.com/blog/2021/01/27/we-need-to-talk-no-proxy/#standardizing-no_proxy[standardizing `noproxy`], except in how it is configured.
+
+1. The `*` wildcard matches all hosts.
+2. A hostname with a leading dot (`.`) is stripped.
+3. A hostname matches all domain prefixes.
+4. CIDR blocks can be specified for matching.
+5. Hostnames are not resolved; a hostname will match its declared name only and not its possibly resolved IP address.
+6. IP addresses are treated verbatim (no special handling of loopback address).
+
+== Compatibility
+
+Java applications that embed Pkl and construct an evaluator with `EvaluatorBuilder#preconfigured` will be configured to talk to the host's proxy settings, if one is set via `java.net.ProxySelector.setDefault()`.
+This is technically a breaking change.
+
+== Future directions
+
+There are several more features related to proxies that can be supported in the future:
+
+* HTTPS proxies
+* SOCKS proxies
+* Alternative authentication methods (e.g. setting the `Proxy-Authorization` header)
+
+== Alternatives considered
+
+=== Configuration via env vars
+
+Many tools look for environment variables (e.g. `http_proxy`, `NO_PROXY`) for proxy settings.
+To conform to such tooling, it was considered to also respect these environment variables in Pkl.
+
+The drawbacks of this are:
+
+. As a general principle, environment variables are not used to configure Pkl itself, because it can be confused with inputs to a Pkl program. It's not clear how `pkl eval --env-var http_proxy=http://example.com` should be handled.
+. The rules behind `no_proxy` and the HTTP proxy address can differ from one tool to another. It introduces a potentially unbounded number of edge conditions for how to parse these values.
+
+== Acknowledgements
+
+Thanks to link:https://github.com/translatenix[@translatenix] for laying down the groundwork for HttpClient, and the initial design for HTTP proxying!
