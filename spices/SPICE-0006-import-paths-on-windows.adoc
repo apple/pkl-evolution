@@ -1,7 +1,7 @@
 = Import paths on Windows
 
 * Proposal: link:./SPICE-0006-import-paths-on-windows.adoc[SPICE-0006]
-* Status: Acceptedd
+* Status: Accepted
 * Implemented in: Pkl 0.26
 * Category: Language
 
