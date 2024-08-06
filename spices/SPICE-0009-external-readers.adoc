@@ -1,0 +1,120 @@
+= External Readers
+
+* Proposal: link:./SPICE-0009-external-readers.adoc[SPICE-0009]
+* Status: TBD
+* Implemented in: Pkl 0.27 ()
+* Category: Language
+
+== Introduction
+
+This SPICE proposes a way for custom module and resource readers to be used when evaluating modules with `pkl eval`.
+
+== Motivation
+
+When used via language binding libraries, custom module and resource readers schemes may be implemented by client code.
+Custom readers help bridge Pkl into systems where it does't fit natively, enabling a wide variety of use cases:
+
+* Mediating access to resources that require authentication (eg. a secret store)
+* Querying data accessible via non-HTTP protocols (eg. LDAP)
+* Providing filesystem abstractions for remote or in-memory modules
+* And more!
+
+One of the primary drawbacks to custom readers is that using one instantly turns a Pkl module into a _incompatible language_: the module may only be evaoluated by the client tool or application providing the reader and can no longer be evaluated directly using `pkl eval`.
+This hinders development and debugging of such modules, as typical workflows involving `trace(<expr>)` or `pkl eval -x '<expr>'` behave differently or are no longer possible.
+
+== Proposed Solution
+
+The existing message passing API and client libraries will be expanded to support external readers.
+Instead of client libraries invoking `pkl server`, `pkl eval` invocations, when configured with an external reader, will run the reader executable as a subprocess.
+External readers can provide any number of resource and/or module schemes and will configured as an executable and list of arguments via:
+
+* CLI flag
+* PklProject property
+* Java API
+* Message passing API
+
+
+[source,pkl]
+----
+/// May be specified as an URI to a readable resource, eg. `file:`, `https:`, or `package:`
+/// May also be specified as just an executable name, in which case it will be resolved according to the PATH environment variable
+executable: String
+
+/// Command line arguments that will be passed to the reader process
+arguments: Listing<String>
+----
+
+=== Example
+
+Consider this module:
+
+[source,pkl]
+----
+username = "john_appleseed"
+
+email = read("ldap://ds.example.com:389/dc=example,dc=com?mail?sub?(uid=\(username))").text
+----
+
+Pkl doesn't implement the `ldap:` resource URI scheme natively, but an external reader can provide it.
+Assuming a hypothetical `pkl-ldap` binary implementing the external reader protocol and the `ldap:` scheme is in the `$PATH`, this module can be evaluated as:
+
+[source,text]
+----
+$ pkl eval <module> --external-reader=pkl-ldap --allowed-resources prop:,ldap:
+username = "john_appleseed"
+email = "appleseed@example.com"
+----
+
+For security reasons, schemes provided by external readers are not allowed by default and clients must explicitly allow the desired scheme(s).
+In this example, the external reader may provide both `ldap:` and `ldaps:` schemes.
+If a codebase or user wishes to enforce that only secure LDAP connections are made, the `ldaps:` scheme may be allowed while `ldap:` is not.
+
+== Detailed design
+
+To avoid terminology confusion with the existing language binding message passing model, the `pkl` process will remain known as the "server" and the reader process will be known as the "client", despite all requests in this proposal being initiated by the `pkl` process.
+
+* Message Passing API
+** Add DiscoverReadersRequest
+** Add DiscoverReadersResponse
+** CreateEvaluatorRequest
+*** `externalReaders`
+** Pull into a new pkl-msgapi(?) package shared by pkl-code and pkl-server
+*** Message*.kt files at least
+
+* Java API
+** New `ExternalModuleKeyFactory` type
+*** Entrypoints (CLI, Server) construct based on `externalReaders`
+*** On (initialization? explicit startup?), launch subprocess
+*** send each DiscoverReadersRequest, await DiscoverReadersResponse (timeout? 1s?)
+
+* stdlib
+** `pkl:EvaluatorSettings` (used in `pkl:Project`)
+*** `externalReaders: Listing<ExternalReader>`
+
+* CLI
+** `--external-reader`
+*** use `clikt.multiple`
+*** may be passed as a space-separated string where the first element becomes `executable` and any remainder becomes `arguments`
+*** should this be shlex'd? or just split on spaces?
+
+* Language Bindings
+** Add `ExternalReaderRuntime`
+** Add `externalReaders` to `EvaluatorOptions`
+
+== Compatibility
+
+This proposal is purely additive.
+
+In the case where newer language bindings configure external readers against an older `pkl` binary, the new `CreateEvaluatorRequest.externalReaders` field will be ignored silently. If module evaluation relies on configured external readers, it will fail accordingly.
+
+== Future directions
+
+* Java library for bindings to support being an external reader client
+* To improve CLI ergonomics, could implement additive `--allow-resources`/`--allow-modules` args (current flags replace full list)
+* Manage external reader processes separately from EvaluatorImpl lifetime
+** Potential large savings in per-evaluator overhead for Java API and Language Binding usage
+** Savings for CLI usage (primary use case) would be minimal
+** Code is more complicated (need an ExternalReaderManager sort of mechanism tracking unique commands => processes)
+** Change could be made as followup work with only changes to Java APIs and internals
+
+== Alternatives considered
