@@ -19,7 +19,7 @@ Custom readers help bridge Pkl into systems where it does't fit natively, enabli
 * Providing filesystem abstractions for remote or in-memory modules
 * And more!
 
-One of the primary drawbacks to custom readers is that using one instantly turns a Pkl module into a _incompatible language_: the module may only be evaoluated by the client tool or application providing the reader and can no longer be evaluated directly using `pkl eval`.
+One of the primary drawbacks to custom readers is that using one instantly turns a Pkl module into a _incompatible language_: the module may only be evaluated by the client tool or application providing the reader and can no longer be evaluated directly using `pkl eval`.
 This hinders development and debugging of such modules, as typical workflows involving `trace(<expr>)` or `pkl eval -x '<expr>'` behave differently or are no longer possible.
 
 == Proposed Solution
