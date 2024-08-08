@@ -26,7 +26,7 @@ This hinders development and debugging of such modules, as typical workflows inv
 
 The existing message passing API and client libraries will be expanded to support external readers.
 Instead of client libraries invoking `pkl server`, `pkl eval` invocations, when configured with an external reader, will run the reader executable as a subprocess.
-External readers can provide any number of resource and/or module schemes and will configured as an executable and list of arguments via:
+External readers can provide any number of resource and/or module schemes and will be configured as an executable and list of arguments via:
 
 * CLI flag
 * PklProject property
