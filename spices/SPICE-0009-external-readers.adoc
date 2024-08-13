@@ -33,10 +33,9 @@ External readers can provide any number of resource and/or module schemes and wi
 * Java API
 * Message passing API
 
-
 [source,pkl]
 ----
-/// May be specified as an URI to a readable resource, eg. `file:`, `https:`, or `package:`
+/// May be specified as an absolute path to an executable
 /// May also be specified as just an executable name, in which case it will be resolved according to the PATH environment variable
 executable: String
 
@@ -109,6 +108,41 @@ In the case where newer language bindings configure external readers against an 
 
 == Future directions
 
+* Support for specifying URIs for external reader executables so they may be distributed in Pkl packages.
+This is potentially very valuable for statically compiled reader binaries, but significantly complicates the implementation.
+The design, as proposed, does not prohibit implementing this as a future enhancement.
+This would also make it very convenient to provide friendly, type-safe Pkl APIs for complex reader URI schemes instead of having the "stringly-typed" URI as the primary API, e.g. building on the `ldap:` example:
++
+[source,pkl]
+----
+typealias LDAPResult = Mapping<String, Listing<String>>
+
+class LDAPQuery {
+    protocol: *"ldap"|"ldaps"
+    host: String
+    port: UInt16 = 389
+    baseDN: String
+    attributes: Listing<String>
+    scope: *"base"|"one"|"sub"
+    filter: String = "(&)" // matches anything
+
+    fixed results: Listing<LDAPResult> = new json.Parser { useMapping = true }.parse(
+        read("\(protocol)://\(host):\(port)/\(baseDN)?\(attributes.join(","))?\(scope)?\(filter)").text
+    )
+}
+
+local queryResults = new LDAPQuery {
+    host = "ds.example.com"
+    baseDN = "dc=example,dc=com"
+    attributes { "mail" }
+    scope = "sub"
+    filter = "(uid=\(username))"
+}.results
+
+username = "john_appleseed"
+
+email = queryResults[0]["mail"][0]
+----
 * Java library for bindings to support being an external reader client
 * To improve CLI ergonomics, could implement additive `--allow-resources`/`--allow-modules` args (current flags replace full list)
 * Manage external reader processes separately from EvaluatorImpl lifetime
@@ -118,3 +152,45 @@ In the case where newer language bindings configure external readers against an 
 ** Change could be made as followup work with only changes to Java APIs and internals
 
 == Alternatives considered
+
+=== One shot, per-read subprocesses
+
+Instead of "persistent" reader processes invoked during evaluator initialization.
+Instead of using the msgpack message-passing API, reader binaries could be invoked with the read URI as a CLI argument and return their result on standard output.
+This potentially greatly lowers the barrier to entry for implementing external readers, even allowing them to be implemented by shell scripts.
+
+This approach does not have a clean way to support globbed reads.
+To resolve globs, Pkl can require many list modules/resources requests.
+It's not clear one-shot reader processes would be invoked differently to distinguish read requests from list requests.
+Multiple invocations would also have potentially significant overhead, especially for readers implemented in interpreted languages.
+
+There is definitely value in supporting significantly reduced barrier to reader implementation, especially when globbing is not required.
+One way this gap might be closed is with a "shim" reader process that translates the message passing API calls to subprocess invocations:
+
+[source,text]
+----
+$ pkl eval <module> --external-reader 'pkl-cmd ldap=pkl-ldap.sh' --allowed-resources prop:,ldap:
+username = "john_appleseed"
+email = "appleseed@example.com"
+----
+
+It may even make sense for the `pkl` binary itself to provide this functionality.
+
+=== Up-front scheme -> reader registration
+
+Instead of Pkl starting reader subprocesses and discovering supported schemes during evaluator initialization, an alternative approach would be to explicit register this mapping.
+This would allow reader processes to be launched on first read instead of during evaluator initialization.
+This is more efficient in cases where the reader is not actually needed, but requires a greater amount of up-front configuration, especially when the same reader executable will be used for multiple schemes.
+
+[source,text]
+----
+$ pkl eval <module> --external-resource-reader ldap=pkl-ldap --allowed-resources prop:,ldap:
+username = "john_appleseed"
+email = "appleseed@example.com"
+----
+
+This approach raises a few questions:
+
+* Should declaring an external reader automatically allow reads for its scheme?
+Declaring explicit allowed resources should probably disable this behavior.
+* What happens when a reader doesn't support the scheme it is declared for?
