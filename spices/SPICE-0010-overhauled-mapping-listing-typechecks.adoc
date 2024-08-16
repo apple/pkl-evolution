@@ -28,7 +28,7 @@ numBirds = birds[0]
 //         ^^^^^
 ----
 
-During execution of `birds` (as highlighted by the carets), Pkl will execute both members of `birds`, including `new { name = "Warbler" }`, even though neither of the members are used in the result
+During execution of `birds` (as highlighted by the carets), Pkl will execute both members of `birds`, including `new { name = "Warbler" }`, even though it is not used in producing the program's result.
 
 In psuedocode, Pkl executes the following instructions:
 
