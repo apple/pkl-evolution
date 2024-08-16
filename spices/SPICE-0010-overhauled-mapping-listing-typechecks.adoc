@@ -24,7 +24,7 @@ hidden birds: Listing<Bird> = new {
   new { name = "Warbler" }
 }
 
-numBirds = birds.length
+numBirds = birds[0]
 //         ^^^^^
 ----
 
