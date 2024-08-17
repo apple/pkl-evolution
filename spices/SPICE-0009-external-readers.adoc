@@ -72,39 +72,156 @@ If a codebase or user wishes to enforce that only secure LDAP connections are ma
 
 To avoid terminology confusion with the existing language binding message passing model, the `pkl` process will remain known as the "server" and the reader process will be known as the "client", despite all requests in this proposal being initiated by the `pkl` process.
 
-* Message Passing API
-** Add DiscoverReadersRequest
-** Add DiscoverReadersResponse
-** CreateEvaluatorRequest
-*** `externalReaders`
-** Pull into a new pkl-msgapi(?) package shared by pkl-code and pkl-server
-*** Message*.kt files at least
+=== Overall Flow
 
-* Java API
-** New `ExternalModuleKeyFactory` type
-*** Entrypoints (CLI, Server) construct based on `externalReaders`
-*** On (initialization? explicit startup?), launch subprocess
-*** send each DiscoverReadersRequest, await DiscoverReadersResponse (timeout? 1s?)
+1. User requests an evaluator (via Java API, Message Passing API, or CLI) with an external reader.
+2. Entrypoint (client Java code, `CliEvaluator`, or `Server`) instantiates an `ExternalReader`.
+3. The `ExternalReader` is started, which starts the configured child process and sends a `DiscoverReadersRequest` message.
+4. A `DiscoverReadersResponse` message is received (within some timeout).
+5. The entrypoint requests resource readers (`ExternalResourceReader`) and module key factories (`ExternalModuleKeyFactory`) from the `ExternalReader` and uses them to build an evaluator.
+`ExternalResourceReader` and `ExternalModuleKeyFactory` function similarly to the existing `ClientResourceReader` and `ClientModuleKeyFactory`, implementation may be reusable entirely.
+6. Evaluation begins.
+7. A resource or module read is encountered.
+8. The appropriate `Read*Request` message is sent to the child process, the corresponding `Read*Response` message is awaited.
+9. Evaluation continues.
+10. Evaluation completes.
+11. The `ExternalReader` is closed, terminating the child process.
 
-* stdlib
-** `pkl:EvaluatorSettings` (used in `pkl:Project`)
-*** `externalReaders: Listing<ExternalReader>`
+=== Java API
 
-* CLI
-** `--external-reader`
-*** use `clikt.multiple`
-*** may be passed as a space-separated string where the first element becomes `executable` and any remainder becomes `arguments`
-*** should this be shlex'd? or just split on spaces?
+New APIs:
 
-* Language Bindings
-** Add `ExternalReaderRuntime`
-** Add `externalReaders` to `EvaluatorOptions`
+* `ExternalResourceReader` - a `ResourceReader` implementation similar (identical?) to `ClientResourceReader`.
+* `ExternalModuleKeyFactory` - a `ModuleKeyFactory` implementation similar (identical?) to `ClientModuleKeyFactory`.
+* `ExternalModuleKey` - a `ModuleKey` implementation similar (identical?) to `ClientModuleKey`.
+* `ExternalReader` - manages the lifecycle of child processes.
+    ** Explicit `open`/`close` methods to manage child process lifecycle.
+    ** Opening an `ExternalReader` spawns the subprocess, sets up the `MessageTransport`, sends a `DiscoverReadersRequest` message, and awaits a `DiscoverReadersResponse` response.
+    ** Methods to procure `ExternalResourceReader` and `ExternalModuleKeyFactory` instances.
+
+This proposal requires that the message passing API functionality move out of pkl-server.
+A new project pkl-msgapi will be created to contain the new APIs and the core messaging code current part of pkl-server (`pkl-server/src.main/kotlin/org.pkl.server/Message*.kt`).
+The pkl-msgapi project will be depended on by pkl-cli, pkl-server, and Java API clients using external readers.
+
+=== Message Passing API
+
+Two new message types will be added:
+
+[source,pkl]
+----
+/// Code: 0x2e
+/// Type: Server Request
+class DiscoverReadersRequest {
+  /// A number identifying this request
+  requestId: Int
+}
+
+/// Code: 0x2f
+/// Type: Client Response
+class DiscoverReadersResponse {
+  /// A number identifying this request
+  requestId: Int
+
+  /// Register client-side module readers.
+  ///
+  /// [ClientModuleReader] is defined at https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html#create-evaluator-request
+  clientModuleReaders: Listing<ClientModuleReader>?
+
+  /// Register client-side resource readers.
+  ///
+  /// [ClientResourceReader] is defined at https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html#create-evaluator-request
+  clientResourceReaders: Listing<ClientResourceReader>?
+}
+----
+
+`CreateEvaluatorRequest` will be expanded with an additional property:
+[source,pkl]
+----
+externalReaders: Listing<ExternalReader>?
+
+class ExternalReader {
+  /// May be specified as an absolute path to an executable
+  /// May also be specified as just an executable name, in which case it will be resolved according to the PATH environment variable
+  executable: String
+
+  /// Command line arguments that will be passed to the reader process
+  arguments: Listing<String>
+}
+----
+
+=== CLI
+
+A new `--external-reader` CLI argument will be added to configure external readers.
+This argument can be provided multiple times (using `clikt.multiple`) to configure multiple external readers.
+The argument may be passed as a space-separated string where the first element becomes `executable` and any remainder becomes `arguments`.
+
+TBD: It might be best if the argument value is link:https://docs.python.org/3/library/shlex.html#shlex.split[shlex'd] instead of split to support passing arguments to the reader process that contain spaces.
+
+=== Standard Library
+
+The `EvaluatorSettings` module will be expanded to enable configuring external readers in `PklProject` files:
+
+[source,pkl]
+----
+externalReaders: Listing<ExternalReader>?
+
+class ExternalReader {
+  /// May be specified as an absolute path to an executable
+  /// May also be specified as just an executable name, in which case it will be resolved according to the PATH environment variable
+  executable: String
+
+  /// Command line arguments that will be passed to the reader process
+  arguments: Listing<String>
+}
+----
+
+=== Language Binding Libraries
+
+The language binding libraries `pkl-go` and `pkl-swift` will be expanded to support using and implementing external readers.
+For the purpose of illustration, examples will be provided using Golang.
+
+The `EvaluatorOptions` type will be expanded to include a new property for external readers:
+
+[source,go]
+----
+type EvaluatorOptions struct {
+	// ...
+    ExternalReaders []ExternalReader
+	// ...
+}
+
+type ExternalReader struct {
+	Executable string
+	Arguments []string
+}
+----
+
+A new `ExternalReaderRuntime` type will be introduced to implement the child process message passing interface.
+It makes sense to expand the existing libraries to add this functionality as much of the message passing infrastructure and types for implementing resource and module readers can be reused.
+An `ExternalReaderRuntime` is configured with zero or more `ResourceReader` instances and zero or more `ModuleReader`.
+When started, the runtime will consume messages from standard input, dispatch calls to the configured readers, and send responses over standard output.
+
+[source,go]
+----
+type ExternalReaderRuntime interface {
+  Run()
+  Close()
+}
+
+func NewExternalReaderRuntime(resourceReaders []ResourceReader, moduleReaders []ModuleReader) ExternalReaderRuntime {
+  // ...
+}
+----
 
 == Compatibility
 
-This proposal is purely additive.
+From a language perspective, this proposal is purely additive.
 
-In the case where newer language bindings configure external readers against an older `pkl` binary, the new `CreateEvaluatorRequest.externalReaders` field will be ignored silently. If module evaluation relies on configured external readers, it will fail accordingly.
+In the case where newer language bindings configure external readers against an older `pkl` binary, the new `CreateEvaluatorRequest.externalReaders` field will be ignored silently.
+If module evaluation relies on configured external readers, it will fail accordingly.
+
+Any usage of the pkl-server APIs that are moving to pkl-msgapi will break.
+It's unlikely there are clients of these APIs outside the apple/pkl repo.
 
 == Future directions
 
@@ -115,6 +232,8 @@ This would also make it very convenient to provide friendly, type-safe Pkl APIs 
 +
 [source,pkl]
 ----
+import "pkl:json"
+
 typealias LDAPResult = Mapping<String, Listing<String>>
 
 class LDAPQuery {
@@ -152,6 +271,10 @@ email = queryResults[0]["mail"][0]
 ** Change could be made as followup work with only changes to Java APIs and internals
 
 == Alternatives considered
+
+=== Message Passing code in pkl-core
+
+Instead of creating a new project for pkl-msgapi, move the message passing code from pkl-server directly into pkl-core.
 
 === One shot, per-read subprocesses
 
