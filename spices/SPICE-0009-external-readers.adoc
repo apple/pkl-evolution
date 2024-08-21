@@ -85,7 +85,8 @@ To avoid terminology confusion with the existing language binding message passin
 8. The appropriate `Read*Request` message is sent to the child process, the corresponding `Read*Response` message is awaited.
 9. Evaluation continues.
 10. Evaluation completes.
-11. The `ExternalReader` is closed, terminating the child process.
+11. The `ExternalReader` is closed, the child process is sent SIGTERM.
+12. If the child process has not terminated after some timeout (3 seconds?), it is forcefully stopped via SIGKILL.
 
 === Java API
 
@@ -99,9 +100,8 @@ New APIs:
     ** Opening an `ExternalReader` spawns the subprocess, sets up the `MessageTransport`, sends a `DiscoverReadersRequest` message, and awaits a `DiscoverReadersResponse` response.
     ** Methods to procure `ExternalResourceReader` and `ExternalModuleKeyFactory` instances.
 
-This proposal requires that the message passing API functionality move out of pkl-server.
-A new project pkl-msgapi will be created to contain the new APIs and the core messaging code current part of pkl-server (`pkl-server/src.main/kotlin/org.pkl.server/Message*.kt`).
-The pkl-msgapi project will be depended on by pkl-cli, pkl-server, and Java API clients using external readers.
+This proposal requires that the message passing API functionality move out of pkl-server and into pkl-core.
+The code added to pkl-core will include the new APIs and the core messaging code currently part of pkl-server (`pkl-server/src.main/kotlin/org.pkl.server/Message*.kt`).
 
 === Message Passing API
 
@@ -199,7 +199,7 @@ type ExternalReader struct {
 A new `ExternalReaderRuntime` type will be introduced to implement the child process message passing interface.
 It makes sense to expand the existing libraries to add this functionality as much of the message passing infrastructure and types for implementing resource and module readers can be reused.
 An `ExternalReaderRuntime` is configured with zero or more `ResourceReader` instances and zero or more `ModuleReader`.
-When started, the runtime will consume messages from standard input, dispatch calls to the configured readers, and send responses over standard output.
+When started, the runtime will consume messages from the configured `Reader`, dispatch calls to the configured readers, and send responses to the configured `Writer`.
 
 [source,go]
 ----
@@ -208,9 +208,29 @@ type ExternalReaderRuntime interface {
   Close()
 }
 
-func NewExternalReaderRuntime(resourceReaders []ResourceReader, moduleReaders []ModuleReader) ExternalReaderRuntime {
+type ExternalReaderRuntimeOptions struct {
+	// ResourceReaders are the resource readers to be used by the evaluator.
+	ResourceReaders []ResourceReader
+
+	// ModuleReaders are the set of custom module readers to be used by the evaluator.
+	ModuleReaders []ModuleReader
+
+	// Input reader to consume messages from Pkl from
+	// Defaults to os.Stdin if not set
+	Input io.Reader
+
+	// Output writer to produce message to Pkl
+	// Defaults to os.Stdout if not set
+	Output io.Writer
+}
+
+func NewExternalReaderRuntime(opts ...func(options *ExternalReaderRuntimeOptions)) ExternalReaderRuntime {
   // ...
 }
+
+var WithResourceReaders = // ...
+var WithModuleReaders = // ...
+var WithStreams = // ...
 ----
 
 == Compatibility
@@ -220,7 +240,7 @@ From a language perspective, this proposal is purely additive.
 In the case where newer language bindings configure external readers against an older `pkl` binary, the new `CreateEvaluatorRequest.externalReaders` field will be ignored silently.
 If module evaluation relies on configured external readers, it will fail accordingly.
 
-Any usage of the pkl-server APIs that are moving to pkl-msgapi will break.
+Any usage of the pkl-server APIs that are moving to pkl-core will break.
 It's unlikely there are clients of these APIs outside the apple/pkl repo.
 
 == Future directions
@@ -271,10 +291,6 @@ email = queryResults[0]["mail"][0]
 ** Change could be made as followup work with only changes to Java APIs and internals
 
 == Alternatives considered
-
-=== Message Passing code in pkl-core
-
-Instead of creating a new project for pkl-msgapi, move the message passing code from pkl-server directly into pkl-core.
 
 === One shot, per-read subprocesses
 
