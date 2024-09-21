@@ -12,7 +12,7 @@ This SPICE proposes a way for custom module and resource readers to be used when
 == Motivation
 
 When used via language binding libraries, custom module and resource readers schemes may be implemented by client code.
-Custom readers help bridge Pkl into systems where it does't fit natively, enabling a wide variety of use cases:
+Custom readers help bridge Pkl into systems where it doesn't fit natively, enabling a wide variety of use cases:
 
 * Mediating access to resources that require authentication (eg. a secret store)
 * Querying data accessible via non-HTTP protocols (eg. LDAP)
@@ -59,14 +59,20 @@ Assuming a hypothetical `pkl-ldap` binary implementing the external reader proto
 
 [source,text]
 ----
-$ pkl eval <module> --external-reader=pkl-ldap --allowed-resources prop:,ldap:
+$ pkl eval <module> --external-resource ldap=pkl-ldap
 username = "john_appleseed"
 email = "appleseed@example.com"
 ----
 
-For security reasons, schemes provided by external readers are not allowed by default and clients must explicitly allow the desired scheme(s).
 In this example, the external reader may provide both `ldap:` and `ldaps:` schemes.
-If a codebase or user wishes to enforce that only secure LDAP connections are made, the `ldaps:` scheme may be allowed while `ldap:` is not.
+External readers are registered by their scheme, so to support both schemes both would need to be specified on the command line:
+[source,text]
+----
+$ pkl eval <module> --external-resource ldap=pkl-ldap --external-resource ldaps=pkl-ldap
+----
+
+Registering an external reader for a scheme automatically adds that scheme to the default allowed modules/resources.
+As with Pkl's built-in module and resource schemes, setting explicit allowed module or resources overrides this behavior and appropriate patterns must be specified to allow use of external readers.
 
 == Detailed design
 
@@ -75,69 +81,94 @@ To avoid terminology confusion with the existing language binding message passin
 === Overall Flow
 
 1. User requests an evaluator (via Java API, Message Passing API, or CLI) with an external reader.
-2. Entrypoint (client Java code, `CliEvaluator`, or `Server`) instantiates an `ExternalReader`.
-3. The `ExternalReader` is started, which starts the configured child process and sends a `DiscoverReadersRequest` message.
-4. A `DiscoverReadersResponse` message is received (within some timeout).
-5. The entrypoint requests resource readers (`ExternalResourceReader`) and module key factories (`ExternalModuleKeyFactory`) from the `ExternalReader` and uses them to build an evaluator.
-`ExternalResourceReader` and `ExternalModuleKeyFactory` function similarly to the existing `ClientResourceReader` and `ClientModuleKeyFactory`, implementation may be reusable entirely.
-6. Evaluation begins.
-7. A resource or module read is encountered.
-8. The appropriate `Read*Request` message is sent to the child process, the corresponding `Read*Response` message is awaited.
-9. Evaluation continues.
-10. Evaluation completes.
-11. The `ExternalReader` is closed, the child process is sent SIGTERM.
-12. If the child process has not terminated after some timeout (3 seconds?), it is forcefully stopped via SIGKILL.
+2. The entrypoint (client Java code, `CliEvaluator`, or `Server`) instantiates an `ExternalProcess` based on the configured external readers.
+3. The entrypoint instantiates resource readers (`ResourceReaders.External`) and module key factories (`ModuleKeyFactories.External`) referencing the `ExternalProcess` and uses them to build an evaluator.
+`ResourceReaders.External` and `ModuleKeyFactories.External` function almost identically to the existing `ClientResourceReader` and `ClientModuleKeyFactory` and pkl-server will be updated to reuse these implementations where possible.
+4. Evaluation begins.
+5. A resource or module read is encountered.
+6. Upon first read only:
+1.. The `ExternalProcess` is started, which starts the configured child process.
+2.. The child process is sent a `Discover(Module|Resource)ReaderRequest` message.
+3.. A `DiscoverReadersResponse` message is received (within some timeout).
+7. The appropriate `Read*Request` message is sent to the child process, the corresponding `Read*Response` message is awaited.
+8. Evaluation continues.
+9. Evaluation completes.
+10. The `ExternalProcess` is closed, the child process is sent SIGTERM.
+11. If the child process has not terminated after some timeout (3 seconds?), it is forcefully stopped via SIGKILL.
 
 === Java API
 
 New APIs:
 
-* `ExternalResourceReader` - a `ResourceReader` implementation similar (identical?) to `ClientResourceReader`.
-* `ExternalModuleKeyFactory` - a `ModuleKeyFactory` implementation similar (identical?) to `ClientModuleKeyFactory`.
-* `ExternalModuleKey` - a `ModuleKey` implementation similar (identical?) to `ClientModuleKey`.
-* `ExternalReader` - manages the lifecycle of child processes.
-    ** Explicit `open`/`close` methods to manage child process lifecycle.
-    ** Opening an `ExternalReader` spawns the subprocess, sets up the `MessageTransport`, sends a `DiscoverReadersRequest` message, and awaits a `DiscoverReadersResponse` response.
-    ** Methods to procure `ExternalResourceReader` and `ExternalModuleKeyFactory` instances.
+* `ResourceReaders.External` - a `ResourceReader` implementation identical to `ClientResourceReader`.
+* `ModuleKeyFactories.External` - a `ModuleKeyFactory` implementation similar to `ClientModuleKeyFactory`.
+* `ModuleKeys.External` - a `ModuleKey` implementation identical to `ClientModuleKey`.
+* `ExternalProcess` - manages the lifecycle of child processes.
+    ** Explicit `close` methods to manage child process lifecycle.
+    ** The `ExternalProcess` spawns the subprocess on first access, which sets up the `MessageTransport`, sends the appropriate `Discover*ReaderRequest` message, and awaits the corresponding `Discover*ReaderResponse` response.
 
 This proposal requires that the message passing API functionality move out of pkl-server and into pkl-core.
 The code added to pkl-core will include the new APIs and the core messaging code currently part of pkl-server (`pkl-server/src.main/kotlin/org.pkl.server/Message*.kt`).
 
 === Message Passing API
 
-Two new message types will be added:
+Four new message types will be added:
 
 [source,pkl]
 ----
-/// Code: 0x2e
+/// Code: 0x100
 /// Type: Server Request
-class DiscoverReadersRequest {
+class DiscoverModuleReaderRequest {
   /// A number identifying this request
   requestId: Int
+
+  /// The scheme of the resource to discover the spec for
+  scheme: String
 }
 
-/// Code: 0x2f
-/// Type: Client Response
-class DiscoverReadersResponse {
+/// Code: 0x101
+/// Type: Server Request
+class DiscoverResourceReaderRequest {
   /// A number identifying this request
   requestId: Int
 
-  /// Register client-side module readers.
-  ///
-  /// [ClientModuleReader] is defined at https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html#create-evaluator-request
-  clientModuleReaders: Listing<ClientModuleReader>?
+  /// The scheme of the resource to discover the spec for
+  scheme: String
+}
 
-  /// Register client-side resource readers.
+/// Code: 0x102
+/// Type: Client Response
+class DiscoverModuleReaderResponse {
+  /// A number identifying this request
+  requestId: Int
+
+  /// Client-side module reader spec.
   ///
+  /// Null when the external process does not implement the requested scheme.
+  /// [ClientModuleReader] is defined at https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html#create-evaluator-request
+  spec: ClientModuleReader?
+}
+
+/// Code: 0x102
+/// Type: Client Response
+class DiscoverResourceReaderResponse {
+  /// A number identifying this request
+  requestId: Int
+
+  /// Client-side resource reader spec.
+  ///
+  /// Null when the external process does not implement the requested scheme.
   /// [ClientResourceReader] is defined at https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html#create-evaluator-request
-  clientResourceReaders: Listing<ClientResourceReader>?
+  spec: ClientResourceReader?
 }
 ----
 
-`CreateEvaluatorRequest` will be expanded with an additional property:
+`CreateEvaluatorRequest` will be expanded with additional properties:
 [source,pkl]
 ----
-externalReaders: Listing<ExternalReader>?
+externalModuleReaders: Mapping<String, ExternalReader>?
+
+externalResourceReaders: Mapping<String, ExternalReader>?
 
 class ExternalReader {
   /// May be specified as an absolute path to an executable
@@ -151,9 +182,10 @@ class ExternalReader {
 
 === CLI
 
-A new `--external-reader` CLI argument will be added to configure external readers.
-This argument can be provided multiple times (using `clikt.multiple`) to configure multiple external readers.
-The argument may be passed as a space-separated string where the first element becomes `executable` and any remainder becomes `arguments`.
+New `--external-resource` and `--external-module` CLI argument will be added to configure external readers.
+The arguments can be provided multiple times to configure multiple external readers.
+The arguments are passed as `=`-delimited key-value pairs where the key is the reader's URI scheme.
+The argument values may be passed as space-separated strings where the first element becomes `executable` and any remainder becomes `arguments`.
 
 TBD: It might be best if the argument value is link:https://docs.python.org/3/library/shlex.html#shlex.split[shlex'd] instead of split to support passing arguments to the reader process that contain spaces.
 
@@ -163,7 +195,9 @@ The `EvaluatorSettings` module will be expanded to enable configuring external r
 
 [source,pkl]
 ----
-externalReaders: Listing<ExternalReader>?
+externalModuleReaders: Mapping<String, ExternalReader>?
+
+externalResourceReaders: Mapping<String, ExternalReader>?
 
 class ExternalReader {
   /// May be specified as an absolute path to an executable
@@ -186,7 +220,8 @@ The `EvaluatorOptions` type will be expanded to include a new property for exter
 ----
 type EvaluatorOptions struct {
 	// ...
-    ExternalReaders []ExternalReader
+    ExternalModuleReaders map[string]ExternalReader
+    ExternalResourceReaders map[string]ExternalReader
 	// ...
 }
 
@@ -198,7 +233,7 @@ type ExternalReader struct {
 
 A new `ExternalReaderRuntime` type will be introduced to implement the child process message passing interface.
 It makes sense to expand the existing libraries to add this functionality as much of the message passing infrastructure and types for implementing resource and module readers can be reused.
-An `ExternalReaderRuntime` is configured with zero or more `ResourceReader` instances and zero or more `ModuleReader`.
+An `ExternalReaderRuntime` is configured with zero or more `ResourceReader` instances and zero or more `ModuleReader` instances.
 When started, the runtime will consume messages from the configured `Reader`, dispatch calls to the configured readers, and send responses to the configured `Writer`.
 
 [source,go]
@@ -237,7 +272,7 @@ var WithStreams = // ...
 
 From a language perspective, this proposal is purely additive.
 
-In the case where newer language bindings configure external readers against an older `pkl` binary, the new `CreateEvaluatorRequest.externalReaders` field will be ignored silently.
+In the case where newer language bindings configure external readers against an older `pkl` binary, the new `CreateEvaluatorRequest.external(Module|Resource)Readers` fields will be ignored silently.
 If module evaluation relies on configured external readers, it will fail accordingly.
 
 Any usage of the pkl-server APIs that are moving to pkl-core will break.
@@ -245,6 +280,8 @@ It's unlikely there are clients of these APIs outside the apple/pkl repo.
 
 == Future directions
 
+* Java library for bindings to support being an external reader client
+* Configuration of external readers via `~/.pkl/settings.pkl`
 * Support for specifying URIs for external reader executables so they may be distributed in Pkl packages.
 This is potentially very valuable for statically compiled reader binaries, but significantly complicates the implementation.
 The design, as proposed, does not prohibit implementing this as a future enhancement.
@@ -267,7 +304,7 @@ class LDAPQuery {
 
     fixed results: Listing<LDAPResult> = new json.Parser { useMapping = true }.parse(
         read("\(protocol)://\(host):\(port)/\(baseDN)?\(attributes.join(","))?\(scope)?\(filter)").text
-    )
+    ) as Listing<LDAPResult>
 }
 
 local queryResults = new LDAPQuery {
@@ -282,25 +319,17 @@ username = "john_appleseed"
 
 email = queryResults[0]["mail"][0]
 ----
-* Java library for bindings to support being an external reader client
-* To improve CLI ergonomics, could implement additive `--allow-resources`/`--allow-modules` args (current flags replace full list)
-* Manage external reader processes separately from EvaluatorImpl lifetime
-** Potential large savings in per-evaluator overhead for Java API and Language Binding usage
-** Savings for CLI usage (primary use case) would be minimal
-** Code is more complicated (need an ExternalReaderManager sort of mechanism tracking unique commands => processes)
-** Change could be made as followup work with only changes to Java APIs and internals
 
 == Alternatives considered
 
 === One shot, per-read subprocesses
 
-Instead of "persistent" reader processes invoked during evaluator initialization.
 Instead of using the msgpack message-passing API, reader binaries could be invoked with the read URI as a CLI argument and return their result on standard output.
 This potentially greatly lowers the barrier to entry for implementing external readers, even allowing them to be implemented by shell scripts.
 
 This approach does not have a clean way to support globbed reads.
 To resolve globs, Pkl can require many list modules/resources requests.
-It's not clear one-shot reader processes would be invoked differently to distinguish read requests from list requests.
+It's not clear how one-shot reader processes could be invoked differently to distinguish read requests from list requests.
 Multiple invocations would also have potentially significant overhead, especially for readers implemented in interpreted languages.
 
 There is definitely value in supporting significantly reduced barrier to reader implementation, especially when globbing is not required.
@@ -308,28 +337,9 @@ One way this gap might be closed is with a "shim" reader process that translates
 
 [source,text]
 ----
-$ pkl eval <module> --external-reader 'pkl-cmd ldap=pkl-ldap.sh' --allowed-resources prop:,ldap:
+$ pkl eval <module> --external-resource ldap='pkl-cmd ldap=pkl-ldap.sh'
 username = "john_appleseed"
 email = "appleseed@example.com"
 ----
 
 It may even make sense for the `pkl` binary itself to provide this functionality.
-
-=== Up-front scheme -> reader registration
-
-Instead of Pkl starting reader subprocesses and discovering supported schemes during evaluator initialization, an alternative approach would be to explicit register this mapping.
-This would allow reader processes to be launched on first read instead of during evaluator initialization.
-This is more efficient in cases where the reader is not actually needed, but requires a greater amount of up-front configuration, especially when the same reader executable will be used for multiple schemes.
-
-[source,text]
-----
-$ pkl eval <module> --external-resource-reader ldap=pkl-ldap --allowed-resources prop:,ldap:
-username = "john_appleseed"
-email = "appleseed@example.com"
-----
-
-This approach raises a few questions:
-
-* Should declaring an external reader automatically allow reads for its scheme?
-Declaring explicit allowed resources should probably disable this behavior.
-* What happens when a reader doesn't support the scheme it is declared for?
