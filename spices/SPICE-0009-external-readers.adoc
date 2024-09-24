@@ -88,13 +88,14 @@ To avoid terminology confusion with the existing language binding message passin
 5. A resource or module read is encountered.
 6. Upon first read only:
 1.. The `ExternalProcess` is started, which starts the configured child process.
-2.. The child process is sent a `Discover(Module|Resource)ReaderRequest` message.
-3.. A `DiscoverReadersResponse` message is received (within some timeout).
+2.. The child process is sent a `Initialize(Module|Resource)ReaderRequest` message.
+3.. A `Initialize(Module|Resource)ReaderResponse` message is received (within some timeout).
 7. The appropriate `Read*Request` message is sent to the child process, the corresponding `Read*Response` message is awaited.
 8. Evaluation continues.
 9. Evaluation completes.
-10. The `ExternalProcess` is closed, the child process is sent SIGTERM.
-11. If the child process has not terminated after some timeout (3 seconds?), it is forcefully stopped via SIGKILL.
+10. The evaluator is closed.
+1.. The `ExternalProcess` is closed, the child process is sent SIGTERM.
+2.. If the child process has not terminated after some timeout (3 seconds?), it is forcefully stopped via SIGKILL.
 
 === Java API
 
@@ -105,7 +106,7 @@ New APIs:
 * `ModuleKeys.External` - a `ModuleKey` implementation identical to `ClientModuleKey`.
 * `ExternalProcess` - manages the lifecycle of child processes.
     ** Explicit `close` methods to manage child process lifecycle.
-    ** The `ExternalProcess` spawns the subprocess on first access, which sets up the `MessageTransport`, sends the appropriate `Discover*ReaderRequest` message, and awaits the corresponding `Discover*ReaderResponse` response.
+    ** The `ExternalProcess` spawns the subprocess on first access, which sets up the `MessageTransport`, sends the appropriate `Initialize*ReaderRequest` message, and awaits the corresponding `Initialize*ReaderResponse` response.
 
 This proposal requires that the message passing API functionality move out of pkl-server and into pkl-core.
 The code added to pkl-core will include the new APIs and the core messaging code currently part of pkl-server (`pkl-server/src.main/kotlin/org.pkl.server/Message*.kt`).
@@ -118,28 +119,18 @@ Four new message types will be added:
 ----
 /// Code: 0x100
 /// Type: Server Request
-class DiscoverModuleReaderRequest {
-  /// A number identifying this request
+class InitializeModuleReaderRequest {
+  /// A number identifying this request.
   requestId: Int
 
-  /// The scheme of the resource to discover the spec for
+  /// The scheme of the resource to initialize.
   scheme: String
 }
 
 /// Code: 0x101
-/// Type: Server Request
-class DiscoverResourceReaderRequest {
-  /// A number identifying this request
-  requestId: Int
-
-  /// The scheme of the resource to discover the spec for
-  scheme: String
-}
-
-/// Code: 0x102
 /// Type: Client Response
-class DiscoverModuleReaderResponse {
-  /// A number identifying this request
+class InitializeModuleReaderResponse {
+  /// A number identifying this request.
   requestId: Int
 
   /// Client-side module reader spec.
@@ -150,9 +141,19 @@ class DiscoverModuleReaderResponse {
 }
 
 /// Code: 0x102
+/// Type: Server Request
+class InitializeResourceReaderRequest {
+  /// A number identifying this request.
+  requestId: Int
+
+  /// The scheme of the resource to initialize.
+  scheme: String
+}
+
+/// Code: 0x102
 /// Type: Client Response
-class DiscoverResourceReaderResponse {
-  /// A number identifying this request
+class InitializeResourceReaderResponse {
+  /// A number identifying this request.
   requestId: Int
 
   /// Client-side resource reader spec.
