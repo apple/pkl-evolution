@@ -80,22 +80,22 @@ To avoid terminology confusion with the existing language binding message passin
 
 === Overall Flow
 
-1. User requests an evaluator (via Java API, Message Passing API, or CLI) with an external reader.
-2. The entrypoint (client Java code, `CliEvaluator`, or `Server`) instantiates an `ExternalProcess` based on the configured external readers.
-3. The entrypoint instantiates resource readers (`ResourceReaders.External`) and module key factories (`ModuleKeyFactories.External`) referencing the `ExternalProcess` and uses them to build an evaluator.
+. User requests an evaluator (via Java API, Message Passing API, or CLI) with an external reader.
+. The entrypoint (client Java code, `CliEvaluator`, or `Server`) instantiates an `ExternalProcess` based on the configured external readers.
+. The entrypoint instantiates resource readers (`ResourceReaders.External`) and module key factories (`ModuleKeyFactories.External`) referencing the `ExternalProcess` and uses them to build an evaluator.
 `ResourceReaders.External` and `ModuleKeyFactories.External` function almost identically to the existing `ClientResourceReader` and `ClientModuleKeyFactory` and pkl-server will be updated to reuse these implementations where possible.
-4. Evaluation begins.
-5. A resource or module read is encountered.
-6. Upon first read only:
-1.. The `ExternalProcess` is started, which starts the configured child process.
-2.. The child process is sent a `Initialize(Module|Resource)ReaderRequest` message.
-3.. A `Initialize(Module|Resource)ReaderResponse` message is received (within some timeout).
-7. The appropriate `Read*Request` message is sent to the child process, the corresponding `Read*Response` message is awaited.
-8. Evaluation continues.
-9. Evaluation completes.
-10. The evaluator is closed.
-1.. The `ExternalProcess` is closed, the child process is sent SIGTERM.
-2.. If the child process has not terminated after some timeout (3 seconds?), it is forcefully stopped via SIGKILL.
+. Evaluation begins.
+. A resource or module read is encountered.
+. Upon first read only:
+.. The `ExternalProcess` is started, which starts the configured child process.
+.. The child process is sent a `Initialize(Module|Resource)ReaderRequest` message.
+.. A `Initialize(Module|Resource)ReaderResponse` message is received (within some timeout).
+. The appropriate `Read*Request` message is sent to the child process, the corresponding `Read*Response` message is awaited.
+. Evaluation continues.
+. Evaluation completes.
+. The evaluator is closed.
+.. The `ExternalReader` is closed, the child process is sent the `CloseExternalProcess` message.
+.. If the child process has not terminated after the set timeout (3 seconds), it is forcefully stopped via SIGKILL.
 
 === Java API
 
@@ -113,7 +113,24 @@ The code added to pkl-core will include the new APIs and the core messaging code
 
 === Message Passing API
 
-Four new message types will be added:
+`CreateEvaluatorRequest` will be expanded with additional properties:
+[source,pkl]
+----
+externalModuleReaders: Mapping<String, ExternalReader>?
+
+externalResourceReaders: Mapping<String, ExternalReader>?
+
+class ExternalReader {
+  /// May be specified as an absolute path to an executable
+  /// May also be specified as just an executable name, in which case it will be resolved according to the PATH environment variable
+  executable: String
+
+  /// Command line arguments that will be passed to the reader process
+  arguments: Listing<String>
+}
+----
+
+Five new message types will be added:
 
 [source,pkl]
 ----
@@ -150,7 +167,7 @@ class InitializeResourceReaderRequest {
   scheme: String
 }
 
-/// Code: 0x102
+/// Code: 0x103
 /// Type: Client Response
 class InitializeResourceReaderResponse {
   /// A number identifying this request.
@@ -162,24 +179,14 @@ class InitializeResourceReaderResponse {
   /// [ClientResourceReader] is defined at https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html#create-evaluator-request
   spec: ClientResourceReader?
 }
+
+/// Code: 0x104
+/// Type: Server One Way
+class CloseExternalProcess {}
 ----
 
-`CreateEvaluatorRequest` will be expanded with additional properties:
-[source,pkl]
-----
-externalModuleReaders: Mapping<String, ExternalReader>?
-
-externalResourceReaders: Mapping<String, ExternalReader>?
-
-class ExternalReader {
-  /// May be specified as an absolute path to an executable
-  /// May also be specified as just an executable name, in which case it will be resolved according to the PATH environment variable
-  executable: String
-
-  /// Command line arguments that will be passed to the reader process
-  arguments: Listing<String>
-}
-----
+The `CloseExternalProcess` message exists primarily because different operating systems provide different abilities to gracefully stop child processes.
+Using an in-band message for this purpose reduces the need for external reader developers to address OS-specific implementation details.
 
 === CLI
 
