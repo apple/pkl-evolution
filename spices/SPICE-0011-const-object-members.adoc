@@ -1,0 +1,111 @@
+= Const Object Members
+
+* Proposal: link:./SPICE-0011-const-object-members.adoc[SPICE-0011]
+* Author: https://github.com/bioball[Dan Chao]
+* Status: Review
+* Implemented in: TBD
+* Category: Language
+
+== Introduction
+
+This SPICE proposes allowing object members to be `const`.
+
+== Motivation
+
+Today, the `const` modifier can only be applied to class properties.
+
+However, there are times where this rule is insufficient.
+
+When a module amends another module, it has special rules; top-level properties are considered _object properties_, and not _class properties_.
+
+This means that these properties cannot be declared `const`.
+
+[source,pkl]
+----
+amends "foo.pkl"
+
+const bar = 5 // Pkl Error: modifier `const` cannot be applied to object members
+----
+
+Amending modules can also contain classes and typealiases.
+These members must be declared with the `local` modifier.
+
+However, these members cannot reference their enclosing module's properties, because classes and typealiases can only reference properties that are `const`.
+
+One possible scenario is to define a test fixture.
+
+[source,pkl]
+----
+amends "pkl:test"
+
+import "birds.pkl"
+
+local warbler = "Warbler"
+
+local class Warbler extends birds.Bird {
+  name = warbler // Pkl Error: cannot reference `warbler` from here because it is not `const`
+}
+----
+
+There is no straightforward way to resolve this, because `warbler` cannot be declared `const`:
+
+[source,pkl]
+----
+amends "pkl:test"
+
+import "birds.pkl"
+
+local const warbler = "Warbler" // Pkl Error: modifier `const` cannot be applied to object members
+
+local class Warbler extends birds.Bird {
+  name = warbler
+}
+----
+
+== Proposed Solution
+
+To fix this papercut, a object members are allowed to be `const`, but must co-appear with the `local` modifier.
+
+[source,pkl]
+----
+amends "foo.pkl"
+
+const bar = "bar" // Pkl Error: modifier `const` can only be applied to object members that are also `local`.
+----
+
+[source,pkl]
+----
+amends "foo.pkl"
+
+local const bar = "bar" // OK
+----
+
+This rule exists because the `const` modifier otherwise changes the contract of that property.
+As a design principle, an amending object can only change an object's data, and not its type.
+
+== Detailed design
+
+A new parser rule will be added, to allow parsing of `const` object members.
+It will throw if these members are not also `local`.
+
+Otherwise, the same `const` rules apply for these members.
+
+== Compatibility
+
+Because this is purely enabling behavior that is previously forbidden, this new rule will not break existing Pkl programs.
+
+It will, however, mean that programs that make use of `local const` object members will be incompatible with Pkl 0.26 and below.
+
+Programs that use `local const` object members should add the `@ModuleInfo { minPklVersion = "0.27.0" }` header.
+
+== Future directions
+
+N/A
+
+== Alternatives considered
+
+N/A
+
+== Acknowledgements
+
+N/A
