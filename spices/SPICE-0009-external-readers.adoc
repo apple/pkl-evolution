@@ -107,6 +107,7 @@ New APIs:
 * `ExternalProcess` - manages the lifecycle of child processes.
     ** Explicit `close` methods to manage child process lifecycle.
     ** The `ExternalProcess` spawns the subprocess on first access, which sets up the `MessageTransport`, sends the appropriate `Initialize*ReaderRequest` message, and awaits the corresponding `Initialize*ReaderResponse` response.
+* `ExternalReaderRuntime` - implements the client-side workflow for external readers.
 
 This proposal requires that the message passing API functionality move out of pkl-server and into pkl-core.
 The code added to pkl-core will include the new APIs and the core messaging code currently part of pkl-server (`pkl-server/src.main/kotlin/org.pkl.server/Message*.kt`).
@@ -288,12 +289,11 @@ It's unlikely there are clients of these APIs outside the apple/pkl repo.
 
 == Future directions
 
-* Java library for bindings to support being an external reader client
 * Configuration of external readers via `~/.pkl/settings.pkl`
 * Support for specifying URIs for external reader executables so they may be distributed in Pkl packages.
 This is potentially very valuable for statically compiled reader binaries, but significantly complicates the implementation.
 The design, as proposed, does not prohibit implementing this as a future enhancement.
-This would also make it very convenient to provide friendly, type-safe Pkl APIs for complex reader URI schemes instead of having the "stringly-typed" URI as the primary API, e.g. building on the `ldap:` example:
+This would also make it very convenient to bundle reader executables inside packages to provide friendly, type-safe, and self-contained Pkl APIs for complex reader URI schemes instead of having the "stringly-typed" URI as the primary API, e.g. building on the `ldap:` example:
 +
 [source,pkl]
 ----
