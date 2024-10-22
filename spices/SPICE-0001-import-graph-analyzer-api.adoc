@@ -4,7 +4,7 @@
 * Author: link:https://github.com/bioball[Dan Chao]
 * Status: TBD
 * Implemented in: TBD
-* Category: Tooling
+* Category: Tooling, Stdlib
 
 == Introduction
 
@@ -116,7 +116,9 @@ Produces:
 ----
 imports {
   ["file:///path/to/myFile.pkl"] {
-    "file:///path/to/otherFile.pkl"
+    new {
+      uri = "file:///path/to/otherFile.pkl"
+    }
   }
   ["file:///path/to/otherFile.pkl"] {}
 }
@@ -175,27 +177,53 @@ It contains the class `ImportAnalyzer`, which provides import graph analysis.
 /// Utilities for static analysis of Pkl modules.
 ///
 /// Unlike `pkl:reflect`, these methods do not require loading the modules for analysis.
-@ModuleInfo { minPklVersion = "0.26.0" }
-@Since { version = "0.26.0" }
+@ModuleInfo { minPklVersion = "0.27.0" }
+@Since { version = "0.27.0" }
 module pkl.analyze
 
-class ImportAnalyzer {
-  /// The modules to analyze for imports.
-  moduleUris: Listing<String>
+/// Given a set of Pkl module URIs, returns a graph of imports declared by these modules.
+///
+/// The resulting graph includes transitive imports.
+external function importGraph(moduleUris: Set<Uri>): ImportGraph
 
-  /// The graph of imports declared by [moduleUris].
-  /// Each key-value pair is a module, corresponding with the set of modules
-  /// imported by that module.
+/// The graph of imports declared (directly and transitively) by the modules passed to
+/// [importGraph()].
+class ImportGraph {
+  /// The imports declared within a Pkl program.
   ///
-  /// The set of all modules in the graph can be obtained via its keys.
-  external imports: Mapping<Uri, Listing<Uri>(isDistinct)>
+  /// Each entry maps a module URI to the set of imports declared in that module.
+  ///
+  /// The set of all modules in the graph can be obtained via its [keys][Map.keys].
+  imports: Map<Uri, Set<Import>>
 
-  /// Mappings of modules from their in-language URI, to the URI that is used to fetch the module's contents.
-  external resolvedUris: Mapping<Uri, Uri>(keys == imports.keys)
+  /// Mappings of modules from their in-language URI, to their resolved URI.
+  ///
+  /// A module's in-language URI is the form used within Pkl source code.
+  /// For example, modulepath-based modules have form `modulepath:/path/to/my/module.pkl`.
+  ///
+  /// A module's resolved URI is the form used to load the module's contents.
+  /// The same modulepath module might have form
+  /// `jar:file:///path/to/file.zip!/path/to/my/module.pkl` if Pkl run with
+  /// `--module-path /path/to/file.zip`.
+  ///
+  /// Dependency-notation imports, such as `"@myPackage/myModule.pkl"`, are represented as
+  /// in-language URIs with scheme `projectpackage:`.
+  /// In the case of local project dependenecies, they will be local URIs resolved from the project
+  /// file URI (in normal cases, `file:` URIs).
+  resolvedImports: Map<Uri, Uri>(keys == imports.keys)
+}
+
+/// An import as declared inside a module.
+class Import {
+  /// The absolute (in-language) URI of the import.
+  ///
+  /// Dependency notation URIs (such as `import "@foo/bar"`) are resolved to package URIs with
+  /// scheme `projectpackage:`.
+  uri: Uri
 }
 ----
 
-The `ImportAnalyzer` is the in-language representation of the `pkl analyze imports` CLI command.
+The `analyze.importGraph()` method is the in-language representation of the `pkl anaylze imports` CLI command.
 
 === Java API
 
@@ -206,13 +234,16 @@ Unlike the CLI, this API only parses a module, and does not involve the evaluato
 [source,java]
 ----
 public interface ImportAnalyzer {
-    Results analyze(List<ModuleSource> moduleSources);
+    ImportGraph analyze(URI[] moduleUris);
 
-    interface Results {
-        Map<URI, Set<URI>> getImports();
+    record ImportGraph(
+        Map<URI, Set<Import>> imports,
+        Map<URI, URI> resolvedImports
+    ) {}
 
-        Map<URI, URI> getResolvedUris();
-    }
+    record Import(
+        URI uri
+    ) {}
 }
 
 ----
@@ -251,14 +282,14 @@ imports {
     "pkl:base"
   }
   ["pkl:base"] {
-    "pkl:jsonnet"
-    "pkl:xml"
-    "pkl:protobuf"
+    new { uri = "pkl:jsonnet" }
+    new { uri = "pkl:xml" }
+    new { uri = "pkl:protobuf" }
   }
   ["pkl:jsonnet"] {}
   ["pkl:xml"] {}
   ["pkl:protobuf"] {
-    "pkl:reflect"
+    new { uri = "pkl:reflect" }
   }
   ["file:///path/to/foo.pkl"] {}
   ["file:///path/to/my/foo1.pkl"] {}
@@ -291,7 +322,11 @@ The input files for various Pkl Gradle tasks will switch to using the Java `Impo
 The set of input files will be `resolvedUris` whose keys start with `\file:///`.
 All other modules are assumed to be external to the machine and cache-able.
 
-The `transitiveModules` property is removed.
+The logic for computing transitive modules changes.
+If the `transitiveModules` propperty empty, it is the computed set of imports declared by the source modules.
+However, this computation adds some overhead.
+For users where this overhead is not desired, this property can still be set explicitly.
+When set to a non-empty map, the import graph is not computed as a pre-cursor to executing the task.
 
 == Future directions
 
