@@ -209,11 +209,12 @@ people: Listing<Person> = new {
 <1> A type cast is added to each member.
 <2> The overall result is casted to `Listing`.
 
-=== Surrogate objects
+[#delegating-objects]
+=== Delegating objects
 
 Underneath the hood, casting a listing or mapping returns a _new_ listing/mapping.
 
-This new object is a surrogate of the original object.
+This new object delegates to the original object.
 It behaves just like the original, except its members receive type casts too.
 This type cast may or may not throw an error.
 
@@ -247,7 +248,7 @@ listing1 = (listing0) {
 listing2: Listing<Int> = listing1
 ----
 
-`listing2` is a surrogate of `listing1`, so its parent is still `listing0`.
+`listing2` delegates to `listing1`, so its parent is still `listing0`.
 Thus, `super[0]` is a lookup of the first member of `listing0`.
 
 === Operators: Type cast (`as`) vs. Type test (`is`)
@@ -269,7 +270,7 @@ isPeople = people is Listing<Person> // <1>
 ----
 <1> Each member of `people` is evaluated, and asserted to be a `Person`.
 
-On the other hand, the `as` operator is a type cast, and it behaves just like a typecheck does as described in xref:_surrogate_objects[surrogate objects].
+On the other hand, the `as` operator is a type cast, and it behaves just like a typecheck does as described in xref:delegating-objects[delegate objects].
 
 [source,pkl]
 ----
@@ -280,7 +281,7 @@ local people = new Listing {
 
 myPeople = people as Listing<Person> // <1>
 ----
-<1> `myPeople` is a different object an is a surrogate of `people`.
+<1> `myPeople` is a different object and delegates to `people`
 
 === `new` with explicit parent
 
@@ -356,10 +357,12 @@ value3: List<Listing<String>>|Set<String> // <1>
 ----
 <1> `List` is _shallow_ checked; the `Listing` object itself is evaluated, but its members are not.
 
-=== Optimizations: `unknown`, `Any`, un-parameterized types
+=== Optimizations
+
+==== `unknown`, `Any`, un-parameterized types
 
 Mappings/Listings with type parameter `unknown` or `Any` do not need to have their members casted.
-Therefore, the type cast of a value to `Listing<unknown>` can return the same in-memory object rather than return a xref:_surrogate_objects[surrogate].
+Therefore, the type cast of a value to `Listing<unknown>` can return the same in-memory object rather than return a xref:delegating-objects[delegating object].
 
 [source,pkl]
 ----
@@ -367,7 +370,21 @@ myListing: Listing<unknown> = someListing // <1>
 ----
 <1> `listing` and `someListing` are the same in-memory object
 
-Un-parameterized `Mapping` and `Listing` objects also do not need to return surrogate objects. `Listing` is sugar for `Listing<unknown>`.
+Un-parameterized `Mapping` and `Listing` objects also do not need to return delegating object. `Listing` is sugar for `Listing<unknown>`.
+
+==== Same typechecks
+
+Two types that are the same typecheck does not need return a <<delegating-objects,delegating object>>.
+
+In the following snippet:
+
+[source,pkl]
+----
+l1: Listing<String>
+l2: Listing<String> = l1
+----
+
+`l1` and `l2` have the same type, so we do not need to introduce a new delegating object.
 
 == Compatibility
 
