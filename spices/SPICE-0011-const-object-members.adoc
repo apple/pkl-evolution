@@ -64,7 +64,7 @@ local class Warbler extends birds.Bird {
 
 == Proposed Solution
 
-To fix this papercut, a object members are allowed to be `const`, but must co-appear with the `local` modifier.
+To fix this papercut, object members are allowed to be `const`, but must also be `local`.
 
 [source,pkl]
 ----
