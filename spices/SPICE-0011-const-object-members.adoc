@@ -16,23 +16,7 @@ Today, the `const` modifier can only be applied to class properties.
 
 However, there are times where this rule is insufficient.
 
-When a module amends another module, it has special rules; top-level properties are considered _object properties_, and not _class properties_.
-
-This means that these properties cannot be declared `const`.
-
-[source,pkl]
-----
-amends "foo.pkl"
-
-const bar = 5 // Pkl Error: modifier `const` cannot be applied to object members
-----
-
-Amending modules can also contain classes and typealiases.
-These members must be declared with the `local` modifier.
-
-However, these members cannot reference their enclosing module's properties, because classes and typealiases can only reference properties that are `const`.
-
-One possible scenario is to define a test fixture.
+For example, it is sometimes desirable to define a local class inside an amending module:
 
 [source,pkl]
 ----
@@ -47,20 +31,11 @@ local class Warbler extends birds.Bird {
 }
 ----
 
-There is no straightforward way to resolve this, because `warbler` cannot be declared `const`:
+However, this is invalid code, because properties inside a class cannot reference variables on the enclosing module that are not `const`.
 
-[source,pkl]
-----
-amends "pkl:test"
-
-import "birds.pkl"
-
-local const warbler = "Warbler" // Pkl Error: modifier `const` cannot be applied to object members
-
-local class Warbler extends birds.Bird {
-  name = warbler
-}
-----
+Additionally, it is not possible to fix this by adding the `const` modifier to `local warbler`.
+This is because this module `amends "pkl:test"`, which means that this module is considered a regular object and not a class.
+This means that any members declared here are _object members_, and not _class members_.
 
 == Proposed Solution
 
