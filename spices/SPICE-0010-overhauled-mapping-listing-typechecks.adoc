@@ -1,0 +1,449 @@
+= Overhauled Mapping/Listing Typechecks
+
+* Proposal: link:./SPICE-0010-overhauled-mapping-listing-typechecks.adoc[SPICE-0010]
+* Status: TBD
+* Implemented in: Pkl TBD
+* Category: Language
+
+== Introduction
+
+During typechecks for Listings and Mappings, retain laziness of their object members.
+
+== Motivation
+
+Currently, in order to typecheck a listing or mapping, Pkl will shallow-force its members.
+
+For example, in the following snippet:
+
+[source,pkl]
+----
+class Bird { name: String }
+
+hidden birds: Listing<Bird> = new {
+  new { name = "Osprey" }
+  new { name = "Warbler" }
+}
+
+numBirds = birds[0]
+//         ^^^^^
+----
+
+During execution of `birds` (as highlighted by the carets), Pkl will execute both members of `birds`, including `new { name = "Warbler" }`, even though it is not used in producing the program's result.
+
+In psuedocode, Pkl executes the following instructions:
+
+[source]
+----
+assert value instanceof Listing
+for elem in value.members():
+  assert elem.eval() instanceof Bird
+----
+
+There are two underlying issues with this approach.
+
+=== Performance cost
+
+Executing every member of a mapping or listing can be expensive.
+
+Here is a sample snippet of code, where a glob-import is used to match multiple modules, but yet only one module is selected:
+
+[source,pkl]
+----
+import "Database.pkl"
+
+local dbs: Mapping<String, Database> = import*("*/database.pkl")
+
+cluster: String
+
+fixed database: Database = dbs["\(cluster)/database.pkl"]
+----
+
+A glob import desguars to a mapping, where each member is its own import. Thus, the above import might turn into the following in a real-world codebase:
+
+[source,pkl]
+----
+local dbs: Mapping<String, Database> = new {
+  ["us-west-1/database.pkl"] = import("us-west-1/database.pkl")
+  ["us-west-2/database.pkl"] = import("us-west-2/database.pkl")
+  ["us-west-3/database.pkl"] = import("us-west-3/database.pkl")
+  ["us-east-1/database.pkl"] = import("us-east-1/database.pkl")
+  ["us-east-2/database.pkl"] = import("us-east-2/database.pkl")
+  ["us-east-3/database.pkl"] = import("us-west-3/database.pkl")
+  // etc...
+}
+----
+
+While executing `db`, in order to perform type checking, Pkl will execute every import.
+In this example, it will import as many modules as match the glob pattern.
+As this codebase scales, this snippet will become more expensive.
+
+=== Thrown errors are too coarse
+
+During the typecheck, an error that occurs from reading a mapping or listing member turns into an error when reading the whole object.
+
+This flaw is a limitation in Pkl's own testing framework.
+In `pkl:test`, `facts` are defined as `Mapping<String, Listing<Boolean>>`.
+A thrown error from a single fact gets turned into an error on all facts, because the error gets thrown when the top-level `facts` property is evaluated.
+
+Here is a sample test:
+
+[source,pkl]
+----
+amends "pkl:test"
+
+facts {
+  ["bad fact"] {
+    throw("uh oh")
+  }
+  ["good fact"] {
+    1 + 1 == 2
+  }
+}
+----
+
+Running this produces the following output:
+
+[source]
+----
+module test (file:///test.pkl, line 1)
+  test ❌
+    Error:
+        –– Pkl Error ––
+        uh oh
+
+        5 | throw("uh oh")
+            ^^^^^^^^^^^^^^
+        at test#facts["incorrect fact"][#1] (file:///test.pkl, line 5)
+
+        3 | facts {
+            ^^^^^^^
+        at test#facts (file:///test.pkl, line 3)
+----
+
+The report does not show "some good fact" in the output, and treats the entire test as an error.
+
+A better test report should look like so:
+
+[source]
+----
+module test (file:///test.pkl, line 1)
+  incorrect fact ❌
+    Error:
+        –– Pkl Error ––
+        uh oh
+
+        5 | throw("uh oh")
+            ^^^^^^^^^^^^^^
+        at test#facts["incorrect fact"][#1] (file:///test.pkl, line 5)
+  some good fact ✅
+----
+
+Currently, this report is not possible to produce, because reading the top-level `facts` itself will throw the nested member's exception.
+
+== Proposed Solution
+
+To address this, we will defer typechecking of `Mapping` and `Listing` members to when the members are evaluated.
+
+Here is a sample program, and the steps taken by the interpreter:
+
+[source,pkl]
+----
+class Person { name: String }
+
+local people: Listing<Person> = new {
+  new { name = "Sandra" }
+  new { name = "Zoe" }
+}
+
+numPeople = people.length // <1>
+
+sandra = people[0] // <2>
+----
+<1> Neither Sandra nor Zoe are evaluated; yields `2`.
+<2> Sandra is evaluated, and checked against type `Person`. Zoe is not evaluated. Yields `new Person { name = "Sandra" }`.
+
+Here is a more poignant example, where second member is simply a `throw`.
+
+[source,pkl]
+----
+class Person { name: String }
+
+local people: Listing<Person> = new {
+  new { name = "Sandra" }
+  throw("uh oh")
+}
+
+numPeople = people.length
+
+sandra = people[0]
+----
+
+Yet, Pkl still successfully evaluates this program, because the second member is not in the critical path of evaluation.
+
+This principle is consistent with how Pkl behaves generally.
+The property `local foo = throw("uh oh")` similarly does not affect the result of a program, as long as `foo` is never referenced.
+
+== Detailed design
+
+The typecheck of a Mapping and Listing will _type cast_ the value.
+
+Here is a source snippet:
+
+[source,pkl]
+----
+people: Listing<Person> = new {
+  new { name = "Sandra" }
+  new { name = "Zoe" }
+}
+----
+
+And here is the same snippet with the implied instructions:
+
+[source,pkl]
+----
+people: Listing<Person> = new {
+  new { name = "Sandra" } as Person // <1>
+  new { name = "Zoe" } as Person
+} as Listing // <2>
+----
+<1> A type cast is added to each member.
+<2> The overall result is casted to `Listing`.
+
+[#delegating-objects]
+=== Delegating objects
+
+Underneath the hood, casting a listing or mapping returns a _new_ listing/mapping.
+
+This new object delegates to the original object.
+It behaves just like the original, except its members receive type casts too.
+This type cast may or may not throw an error.
+
+Given this:
+
+[source,pkl]
+----
+listing = new Listing { "hello" }
+
+listingOfNumbers: Listing<Int> = listing
+----
+
+`"hello"` is not an `Int`, so this program should fail.
+Because typechecking is deferred, this failure should not occur until `listing[0]` is evaluated.
+
+Effectively, `listing` and `listingOfNumbers` are _different_ in-memory objects; one which has type assertions at the end of each member, and one which does not.
+This difference is opaque to users; these two objects have the same hash code, and same equality semantics.
+
+In the amends chain, `listingOfNumbers` has the same parent as `listing`. It delegates its member lookups to `listing`, and adds a typecheck at the end of each lookup.
+
+In the following scenario:
+
+[source,pkl]
+----
+listing0 = new Listing { 1; 2; 3 }
+
+listing1 = (listing0) {
+  super[0]
+}
+
+listing2: Listing<Int> = listing1
+----
+
+`listing2` delegates to `listing1`, so its parent is still `listing0`.
+Thus, `super[0]` is a lookup of the first member of `listing0`.
+
+=== Operators: Type cast (`as`) vs. Type test (`is`)
+
+The `as` and `is` operators behave differently.
+
+The `is` operator is a type test, and continues to be an _eager_ check.
+
+This snippet deeply evaluates each member, and asserts its result type.
+
+[source,pkl]
+----
+local people = new Listing {
+  new Person { name = "Sandra" }
+  new Person { name = "Zoe" }
+}
+
+isPeople = people is Listing<Person> // <1>
+----
+<1> Each member of `people` is evaluated, and asserted to be a `Person`.
+
+On the other hand, the `as` operator is a type cast, and it behaves just like a typecheck does as described in xref:delegating-objects[delegate objects].
+
+[source,pkl]
+----
+local people = new Listing {
+  new Person { name = "Sandra" }
+  new Person { name = "Zoe" }
+}
+
+myPeople = people as Listing<Person> // <1>
+----
+<1> `myPeople` is a different object and delegates to `people`
+
+=== `new` with explicit parent
+
+The `new` keyword can be given a type, e.g. `new Listing<Person> {}`.
+
+Currently, this type has no influence on typechecking (see https://github.com/apple/pkl/issues/405[#405]).
+
+The following program executes without a thrown error:
+
+[source,pkl]
+----
+people = new Listing<Person> { 1; 2; 3 }
+----
+
+As part of this change, the above snippet is similarly lazily checked; the member gets casted to `Person` when evaluated.
+
+==== Amending `Listing` and `Mapping`
+
+Amended members of a `Listing` or `Mapping` do not receive type casts.
+
+[source,pkl]
+----
+listing: Listing<Int> = new { 1; 2; 3 }
+
+listing2 = (listing) { "hello" } // <1>
+----
+<1> Okay; result is `new Listing { 1; 2; 3; "hello" }`
+
+=== Mapping keys
+
+Mapping keys are still checked eagerly.
+This is because keys deep-forced when they are used as an entry key.
+In the underlying implementation, mappings are backed by a hash map.
+When they are inserted, their hash code is computed, which deep-forces the value.
+
+=== `List`/`Set`/`Map`/`Pair`
+
+The behavior of `List`, `Set`, `Map`, and `Pair` do not change. Their members are _shallowly_ checked, because these are eager object types.
+
+=== Union types
+
+Consider the following:
+
+[source,pkl]
+----
+myListing: Listing<Int>|Listing<String> = new { 1; "hello" }
+----
+
+The value neither a `Listing<Int>` or `Listing<String>`.
+We might expect that `myListing[0]` can succeed because it can possibly satisfy `Listing<Int>`.
+However, if that holds, Pkl should throw if `myListing[1]` is evaluated.
+Somehow, Pkl must know that `listing[0]` and `listing[1]`  cannot both succeed.
+
+In order to typecheck these values correctly, unions types of two or more of the same parameterized type must be checked eagerly.
+The following types are eagerly checked:
+
+[source,pkl]
+----
+value1: Listing<Int>|Listing<String>
+value2: Listing<Int>|Listing<String>?
+value3: Listing<Int>|(Listing<String>)
+value4: Mapping<String, Int>|Mapping<String, String>
+value5: List<Listing<String>>|List<Listing<Int>>
+----
+
+The following types retain laziness during typecheck:
+
+[source,pkl]
+----
+value1: Listing<Int>|Int
+value2: Listing<Int>|Mapping<String, String>
+value3: List<Listing<String>>|Set<String> // <1>
+----
+<1> `List` is _shallow_ checked; the `Listing` object itself is evaluated, but its members are not.
+
+=== Optimizations
+
+==== `unknown`, `Any`, un-parameterized types
+
+Mappings/Listings with type parameter `unknown` or `Any` do not need to have their members casted.
+Therefore, the type cast of a value to `Listing<unknown>` can return the same in-memory object rather than return a xref:delegating-objects[delegating object].
+
+[source,pkl]
+----
+myListing: Listing<unknown> = someListing // <1>
+----
+<1> `listing` and `someListing` are the same in-memory object
+
+Un-parameterized `Mapping` and `Listing` objects also do not need to return delegating object. `Listing` is sugar for `Listing<unknown>`.
+
+==== Same typechecks
+
+Two types that are the same typecheck does not need return a <<delegating-objects,delegating object>>.
+
+In the following snippet:
+
+[source,pkl]
+----
+l1: Listing<String>
+l2: Listing<String> = l1
+----
+
+`l1` and `l2` have the same type, so we do not need to introduce a new delegating object.
+
+== Compatibility
+
+=== Change in throw behavior
+
+This is a marginally breaking change in the language.
+The following program currently throws, and will not throw after this change is implemented:
+
+[source,pkl]
+----
+local people: Listing<Person> = new {
+  throw("Uh oh")
+}
+
+len = people.length
+----
+
+On the flip-side, the following program does not throw, and will throw after this change is implemented:
+
+[source,pkl]
+----
+people = new Listing<Person> {
+  1
+}
+----
+
+However, this is considered a bug, and throwing here is simply a fix for the bug.
+
+== Future directions
+
+=== Type-casted `Function` types
+
+Another language bug is in typechecks of anonymous functions (lambdas).
+
+This snippet does not throw, but should:
+
+[source,pkl]
+----
+local myFunc: (Int) -> Int = (it) -> it
+result = myFunc.apply("hello")
+----
+
+The fix here should be similar to the fix applied to Listings and Mappings; to cast the provided function into `(Int) -> Int` by returning a _new_ function.
+
+=== Throw when type testing `Function` types
+
+`Function` types can be _casted_, but cannot be _tested_.
+
+[source,pkl]
+----
+myFunc = (it) -> it as (Int) -> Int // <1>
+
+isMyFunc = myFunc is (Int) -> Int // <2>
+----
+<1> Fine; we can wrap the provided function with a new function that asserts the types of the parameter and return value
+<2> This is impossible to check, because Pkl types do not have the concept of subtypes, and runtime functions do not retain their type signatures.
+
+To be sound, this operation should throw when evaluated.
+
+== Alternatives considered
+
+N/A
