@@ -2,8 +2,8 @@
 
 * Proposal: link:./SPICE-0011-const-object-members.adoc[SPICE-0011]
 * Author: https://github.com/bioball[Dan Chao]
-* Status: Review
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: 0.27
 * Category: Language
 
 == Introduction

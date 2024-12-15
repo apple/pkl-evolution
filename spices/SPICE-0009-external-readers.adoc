@@ -1,8 +1,9 @@
 = External Readers
 
 * Proposal: link:./SPICE-0009-external-readers.adoc[SPICE-0009]
-* Status: TBD
-* Implemented in: Pkl 0.27 ()
+* Author: https://github.com/HT154[Josh Basch]
+* Status: Accepted
+* Implemented in: Pkl 0.27
 * Category: Language
 
 == Introduction
@@ -59,7 +60,7 @@ Assuming a hypothetical `pkl-ldap` binary implementing the external reader proto
 
 [source,text]
 ----
-$ pkl eval <module> --external-resource ldap=pkl-ldap
+$ pkl eval <module> --external-resource-reader ldap=pkl-ldap
 username = "john_appleseed"
 email = "appleseed@example.com"
 ----
@@ -68,7 +69,7 @@ In this example, the external reader may provide both `ldap:` and `ldaps:` schem
 External readers are registered by their scheme, so to support both schemes both would need to be specified on the command line:
 [source,text]
 ----
-$ pkl eval <module> --external-resource ldap=pkl-ldap --external-resource ldaps=pkl-ldap
+$ pkl eval <module> --external-resource-reader ldap=pkl-ldap --external-resource-reader ldaps=pkl-ldap
 ----
 
 Registering an external reader for a scheme automatically adds that scheme to the default allowed modules/resources.
@@ -107,7 +108,7 @@ New APIs:
 * `ExternalProcess` - manages the lifecycle of child processes.
     ** Explicit `close` methods to manage child process lifecycle.
     ** The `ExternalProcess` spawns the subprocess on first access, which sets up the `MessageTransport`, sends the appropriate `Initialize*ReaderRequest` message, and awaits the corresponding `Initialize*ReaderResponse` response.
-* `ExternalReaderRuntime` - implements the client-side workflow for external readers.
+* `ExternalReaderClient` - implements the client-side workflow for external readers.
 
 This proposal requires that the message passing API functionality move out of pkl-server and into pkl-core.
 The code added to pkl-core will include the new APIs and the core messaging code currently part of pkl-server (`pkl-server/src.main/kotlin/org.pkl.server/Message*.kt`).
@@ -191,7 +192,7 @@ Using an in-band message for this purpose reduces the need for external reader d
 
 === CLI
 
-New `--external-resource` and `--external-module` CLI argument will be added to configure external readers.
+New `--external-resource-reader` and `--external-module-reader` CLI argument will be added to configure external readers.
 The arguments can be provided multiple times to configure multiple external readers.
 The arguments are passed as `=`-delimited key-value pairs where the key is the reader's URI scheme.
 The argument values may be passed as space-separated strings where the first element becomes `executable` and any remainder becomes `arguments`.
@@ -240,19 +241,19 @@ type ExternalReader struct {
 }
 ----
 
-A new `ExternalReaderRuntime` type will be introduced to implement the child process message passing interface.
+A new `ExternalReaderClient` type will be introduced to implement the child process message passing interface.
 It makes sense to expand the existing libraries to add this functionality as much of the message passing infrastructure and types for implementing resource and module readers can be reused.
-An `ExternalReaderRuntime` is configured with zero or more `ResourceReader` instances and zero or more `ModuleReader` instances.
-When started, the runtime will consume messages from the configured `Reader`, dispatch calls to the configured readers, and send responses to the configured `Writer`.
+An `ExternalReaderClient` is configured with zero or more `ResourceReader` instances and zero or more `ModuleReader` instances.
+When started, the client will consume messages from the configured `Reader`, dispatch calls to the configured readers, and send responses to the configured `Writer`.
 
 [source,go]
 ----
-type ExternalReaderRuntime interface {
+type ExternalReaderClient interface {
   Run()
   Close()
 }
 
-type ExternalReaderRuntimeOptions struct {
+type ExternalReaderClientOptions struct {
 	// ResourceReaders are the resource readers to be used by the evaluator.
 	ResourceReaders []ResourceReader
 
@@ -268,7 +269,7 @@ type ExternalReaderRuntimeOptions struct {
 	Output io.Writer
 }
 
-func NewExternalReaderRuntime(opts ...func(options *ExternalReaderRuntimeOptions)) ExternalReaderRuntime {
+func NewExternalReaderClient(opts ...func(options *ExternalReaderClientOptions)) ExternalReaderClient {
   // ...
 }
 
@@ -345,7 +346,7 @@ One way this gap might be closed is with a "shim" reader process that translates
 
 [source,text]
 ----
-$ pkl eval <module> --external-resource ldap='pkl-cmd ldap=pkl-ldap.sh'
+$ pkl eval <module> --external-resource-reader ldap='pkl-cmd ldap=pkl-ldap.sh'
 username = "john_appleseed"
 email = "appleseed@example.com"
 ----

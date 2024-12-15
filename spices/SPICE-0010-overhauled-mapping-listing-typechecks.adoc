@@ -1,8 +1,9 @@
 = Overhauled Mapping/Listing Typechecks
 
 * Proposal: link:./SPICE-0010-overhauled-mapping-listing-typechecks.adoc[SPICE-0010]
-* Status: TBD
-* Implemented in: Pkl TBD
+* Author: https://github.com/bioball[Dan Chao]
+* Status: Accepted
+* Implemented in: Pkl 0.27
 * Category: Language
 
 == Introduction
