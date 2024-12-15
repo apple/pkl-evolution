@@ -2,8 +2,8 @@
 
 * Proposal: xref:SPICE-0001-import-graph-analyzer-api.adoc[SPICE-0001]
 * Author: link:https://github.com/bioball[Dan Chao]
-* Status: TBD
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: Pkl 0.27
 * Category: Tooling, Stdlib
 
 == Introduction
