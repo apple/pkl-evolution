@@ -120,12 +120,19 @@ class Parser {
 
 A search params API will be introduced for working with `application/x-www-form-urlencoded` encoded query strings.
 
+Additionally, a `hidden fixed` property is added representing the parsed search params of the current URL's query string.
+
 .pkl.Url
 [source,pkl]
 ----
 module pkl.Url
 
 // etc
+
+/// The parsed query as search params.
+hidden fixed searchParams: SearchParams? =
+  if (query != null) SearchParams(query)
+  else null
 
 /// Creates a [SearchParams] from the given form encoded string.
 const function SearchParams(input: String): SearchParams = // etc
@@ -282,12 +289,11 @@ myUrl3: Url = new { // <3>
 myUrl4: Url = // <4>
   let (parsed = parser.parse("https://example.com/foo.txt?foo=bar"))
     (parsed) {
-      local sp = (URL.SearchParams(parsed.query)) {
+      query = (super.searchParams) {
         values {
-          ["qux"] = "corge"
+          ["qux"] { "corge" }
         }
-      }
-      query = sp.toString()
+      }.toString()
     }
 ----
 <1> Constructing URL directly
