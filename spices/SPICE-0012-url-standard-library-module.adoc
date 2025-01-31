@@ -20,7 +20,7 @@ Examples:
 * Database connection strings
 * Binary objects (data URIs)
 
-In the base module is a typealias for `Uri`, but only defines it as a string and does not provide any extra validation.
+In the base module there is a typealias for `Uri`, but only defines it as a `String` and does not provide any extra validation.
 
 Currently, there exists an https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-pantry/pkl.experimental.uri/current/URI/index.html[experimental URI library].
 Much of this design is drawn from the learnings of that library.
