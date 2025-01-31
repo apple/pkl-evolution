@@ -44,7 +44,7 @@ The https://url.spec.whatwg.org/#goals[rationale] for this naming:
 
 === module-level properties
 
-The following make up the properties of the Url class:
+The following make up the properties of the Url module:
 
 .pkl.Url
 [source,pkl]
