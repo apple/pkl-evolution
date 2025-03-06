@@ -1,0 +1,376 @@
+= Bytes standard library class
+
+* Proposal: link:./SPICE-0013-bytes-standard-library.adoc[SPICE-0013]
+* Author: https://github.com/bioball[Dan Chao]
+* Status: TBD
+* Implemented in: TBD
+* Category: Standard Library
+
+== Introduction
+
+This SPICE introduces a new value type called `Bytes`, which represents binary data.
+
+== Motivation
+
+Pkl currently does not have a binary data type.
+
+This introduces the following limitations:
+
+* `pkl eval` can only produce UTF-8 encoded strings.
+* Asides from values coming from `read()`, it is not possible to compute checksums of binary content.
+* It is harder to interop with configuration formats that allow binary data.
+
+== Proposed Solution
+
+A new class will be added to `pkl:base`, called `Bytes`.
+
+== Detailed design
+
+=== Standard library changes
+
+The following changes will be made to the standard library
+
+==== `Bytes` class
+
+A new class will be added to `pkl:base`, called `Bytes`.
+This will be a new value type, (similar to `Duration` and `DataSize`).
+
+[source,pkl]
+----
+@Since { version = "0.29.0" }
+external class Bytes extends Any {
+  /// The value of these bytes.
+  external value: List<UInt8>
+
+  /// The value represented by these bytes, in base64 encoding.
+  external base64: String(isBase64)
+
+  /// The value represented by these bytes, in hexadecimal encoding.
+  external hex: String
+
+  /// The [MD5](https://en.wikipedia.org/wiki/MD5) hash of these bytes as hexadecimal string.
+  ///
+  /// MD5 is cryptographically broken and should not be used for secure applications.
+  external md5: String
+
+  /// The [SHA-1](https://en.wikipedia.org/wiki/SHA-1) hash of these bytes as hexadecimal string.
+  ///
+  /// SHA-1 is cryptographically broken and should not be used for secure applications.
+  external sha1: String
+
+  /// The [SHA-256](https://en.wikipedia.org/wiki/SHA-2) cryptographic hash of these bytes as
+  /// hexadecimal string.
+  external sha256: String
+
+  /// The first 64 bits of the [SHA-256](https://en.wikipedia.org/wiki/SHA-2) cryptographic hash of
+  /// these bytes.
+  external sha256Int: Int
+
+  /// Converts these bytes into a string using UTF-8 encoding.
+  external function encodeToString(): String
+
+  /// Converts these bytes into a string, encoded using [charset].
+  external function encodeToStringWithCharset(charset: Charset): String
+}
+----
+
+Bytes are built using the `Bytes` constructor method.
+
+[source,pkl]
+----
+/// Creates [Bytes] from either a list of ints, or a Base64 encoded string.
+///
+/// Examples:
+/// ```
+/// // Create Bytes from integer literals
+/// bytes1 = Bytes(List(1, 2, 3, 4))
+///
+/// // Create Bytes from a Base64 encoded string
+/// bytes2 = Bytes("AQIDBA==")
+/// ```
+@Since { version = "0.29.0" }
+external const function Bytes(from: List<UInt8>|String(isBase64)): Bytes
+----
+
+The string representation of `Bytes` will be `Bytes("<base64-contents>")`.
+
+Bytes can be compared using the `==` and `!=` operators, and concatenated using the `+` operator.
+
+All other operators are not compatible with bytes.
+
+==== `String` class
+
+The `String` class will receive the following new members:
+
+[source,pkl]
+----
+class String {
+  /* etc */
+
+  /// Tells if this is a valid base64-encoded string.
+  ///
+  /// Facts:
+  /// ```
+  /// "AQIDBA==".isBase64
+  /// !"hello there".isBase64
+  /// ```
+  @Since { version = "0.29.0" }
+  external isBase64: Boolean
+
+  /// Returns the bytes of this string, encoded using UTF-8.
+  @Since { version = "0.29.0" }
+  function toBytes(): Bytes = toBytesWithCharset("UTF-8")
+
+  /// Returns the bytes of this string, encoded using [charset].
+  @Since { version = "0.29.0" }
+  external function toBytesWithCharset(charset: Charset): Bytes
+}
+----
+
+==== `Charset` typealias
+
+A new typealias called `Charset` will be added to the base module.
+
+[source,pkl]
+----
+@Since { version = "0.29.0" }
+typealias Charset = "UTF-8"|"UTF-16"|"ISO-8859-1"
+----
+
+==== `Resource` class
+
+The following property will be added to the `Resource` class.
+
+[source,pkl]
+----
+class Resource {
+  /* etc */
+
+  /// The bytes of this resource.
+  @Since { version = "0.29.0" }
+  external bytes: Bytes
+}
+----
+
+Additionally, the existing properties `base64`, `md5`, `sha1`, `sha256`, `sha256Int` are deprecated, and to be replaced by calling the same properties on `bytes`, or setting `bytes` (in the case of `base64`).
+
+==== `FileOutput` class
+
+A new property is added to the `FileOutput` class, called `bytes`.
+It defaults to the UTF-8 bytes of `text`.
+
+[source,pkl]
+----
+class FileOutput {
+  /* etc */
+
+  /// The textual rendered output.
+  text: String = renderer.renderDocument(value)
+
+  /// The underlying byte array of [text], in UTF-8 encoding.
+  @Since { version = "0.29.0" }
+  bytes: Bytes = text.toBytes()
+}
+----
+
+=== Renderer changes
+
+Some renderers will be able to render `Bytes` out of the box. These are:
+
+* PcfRenderer
+* PlistRenderer
+
+The following Pkl:
+
+[source,pkl]
+----
+res = Bytes("AQIDBA==")
+----
+
+Produces the following PCF:
+
+[source,pkl]
+----
+res = Bytes("AQIDBA==")
+----
+
+Produces the following Plist:
+
+[source,xml]
+----
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>res</key>
+  <data>AQIDBA==</data>
+</dict>
+</plist>
+----
+
+All other renderers will require a converter to be defined for `Bytes`, and throw an error otherwise.
+
+=== Pkl Binary Encoding changes
+
+When encoded to https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html[Pkl Binary Encoding], `Bytes` will be encoded as an array of two elements.
+
+The first element is `0xF`.
+
+The second element is the binary contents of `Bytes`.
+
+=== Codegen changes
+
+Code generators should convert `bytes` into the respective type in the target language.
+
+These will be the mappings for the libraries maintained by the core team:
+
+|===
+|Language |Type
+
+|Java
+|`byte[]`
+
+|Kotlin
+|`ByteArray`
+
+|Go
+|`[]byte`
+
+|Swift
+|`[UInt8]`
+|===
+
+=== Changes to `pkl eval`
+
+By default, `pkl eval` will change to evaluate `output.bytes` of a module.
+Additionally, `pkl eval -m` will change to evaluate the `output.files[*].bytes` of each file output.
+
+These raw bytes will be written either to standard out, or to the specified module.
+
+This change means that it is possible for Pkl to write any content, not just UTF-8 encoded strings.
+
+=== Changes to `org.pkl.core.Evaluator`
+
+The `evaluateExpression` method will map Pkl type `Byte` to `byte[]` in Java.
+
+A new method will be added, called `evaluateOutputBytes`, which evaluates the `output.bytes` of a module.
+
+[source,java]
+----
+interface Evaluator {
+  /**
+   * Evaluates a module's {@code output.bytes} property.
+   */
+  byte[] evaluateOutputBytes(ModuleSource moduleSource);
+}
+----
+
+=== Examples
+
+==== Creating `Bytes`
+
+[source,pkl]
+----
+// From a list
+bytes1 = Bytes(List(1, 2, 3, 4))
+
+// From a base64-encoded string
+bytes2 = Bytes("AQIDBA==")
+----
+
+==== Concatenating two `Bytes`
+
+[source,pkl]
+----
+bytes3: Bytes = bytes1 + bytes2
+----
+
+==== Modifying bytes
+
+NOTE: Although this is possible, Pkl is not efficient at manipulating byte arrays. If heavy computing is needed here, Pkl is likely not the correct tool for this, and should be implemented in terms of `read()` with a custom module reader.
+
+[source,pkl]
+----
+bytes1: Bytes
+
+bytes2 = Bytes(bytes1.toList().take(4))
+----
+
+==== String conversions
+
+[source,pkl]
+----
+myStr = Bytes("SGVsbG8gdGhlcmU=").encodeToString() // "Hello there"
+----
+
+==== Set raw file output
+
+[source,pkl]
+----
+output {
+  files {
+    ["file.bin"] {
+      bytes = read("path/to/my/file.bin").bytes
+    }
+  }
+}
+----
+
+==== Compute a certificate's fingerprint
+
+[source,pkl]
+----
+local certText = read("path/to/my/cert.pem").text
+local certificateBytes = Bytes(
+  certText
+    .replaceFirst("-----BEGIN CERTIFICATE-----", "")
+    .replaceLast("-----END CERTIFICATE-----", "")
+    .replaceAll("\n", "")
+)
+fingerprint = certificateBytes.sha256
+----
+
+== Compatibility
+
+Because of how Pkl resolves names, it is always a breaking change to add a new name to the base module.
+
+Pkl's name resolution rules are:
+
+1. Look for the name in the lexical scope.
+2. Look for the name in the base module.
+3. Look for the name off of implicit `this`.
+
+This means that any conflicting names that are resolved from implicit `this`, they will need to be changed to the explicit `this`.
+
+The new names added are:
+
+* `Bytes`
+* `Charset`
+
+== Future directions
+
+N/A
+
+== Alternatives considered
+
+=== `Bytes` as a regular class
+
+This proposal introduces `Bytes` as a value type (similar to `Duration` and `DataSize`).
+
+An alternative approach is to make this class a regular class (which makes it a `Typed`).
+
+However, using a regular class makes it hard to optimize in the underlying implementation.
+
+When implemented as a value type, it can be backed by its own special representation (and ultimately as Java `byte[]`).
+This is much more challenging when represented as a regular `Typed` object.
+
+Additionally, `Typed` values (like other `Object` types) are designed to be amended, and have late-binding semantics.
+These semantics are not useful for byte arrays.
+
+Furthermore, libraries would have additional overhead.
+For example, the Java API would expose any `Bytes` values as a `PObject`.
+Additionally, the Pkl Binary Encoding would represent this using its existing `Typed` encoding.
+
+== Acknowledgements
+
+Thanks to https://github.com/HT154[@HT154] for exploring this in https://github.com/apple/pkl/pull/924[#924]!
