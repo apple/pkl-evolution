@@ -33,7 +33,7 @@ The following changes will be made to the standard library
 ==== `Bytes` class
 
 A new class will be added to `pkl:base`, called `Bytes`.
-This will be a new value type, (similar to `Duration` and `DataSize`).
+This will be a new value type, similar to `Duration` and `DataSize`.
 
 [source,pkl]
 ----
@@ -245,7 +245,7 @@ These will be the mappings for the libraries maintained by the core team:
 By default, `pkl eval` will change to evaluate `output.bytes` of a module.
 Additionally, `pkl eval -m` will change to evaluate the `output.files[*].bytes` of each file output.
 
-These raw bytes will be written either to standard out, or to the specified module.
+These raw bytes will be written either to standard out, or to the specified output file.
 
 This change means that it is possible for Pkl to write any content, not just UTF-8 encoded strings.
 
