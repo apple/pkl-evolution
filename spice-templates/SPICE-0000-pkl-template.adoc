@@ -1,6 +1,7 @@
 = SPICE Name
 
 * Proposal: link:./SPICE-NNNN-name-of-proposal.adoc[SPICE-NNNN]
+* Author: https://website.com[Author Name]
 * Status: Accepted or Rejected
 * Implemented in: Pkl <version>
 * Category: Language, Standard Library, Tooling
