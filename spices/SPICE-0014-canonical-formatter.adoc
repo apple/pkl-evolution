@@ -88,8 +88,8 @@ for users, where their whole codebase would be formatted different due to a rule
 Some of these rules were taken from our https://pkl-lang.org/main/current/style-guide/index.html[style guide] verbatim,
 others had to be made more strict.
 
-Rules are presented here in order of more generic to less generic.
-Less generic rules (bigger numbers) overrule previously defined ones, if they conflict.
+Rules are presented here in order of generic to specific.
+Generic rules (bigger numbers) overrule previously defined ones, if they conflict.
 
 ==== [0001] Line Width
 
@@ -192,6 +192,7 @@ There must be no empty spaces
 - After a `*` in a default type
 - Between a type and its constraints and type parameters
 - After the opening and before the closing of: parentheses (`()`), square brackets (`[]`), and angle brackets (`<>`)
+- At the end of a line
 
 .input
 [source, pkl]
@@ -225,19 +226,134 @@ function fun(x: Int?, b: Boolean) = if (b) /* return x */ x else x + bar[0]
 choices: "foo"|*"bar"|String
 ----
 
-==== [0004] Module definitions
+==== [0004] Line breaks
 
-Module, amend, and extend definitions must be written in a single line. +
-There must be no empty lines between a module and an amend/extend definition.
+The following constructs must be written in a single line, if they don't go over the maximum line limit.
+
+- Module, amend, and extend definition
+- Import clause
+- Class header
+- Property header
+- Function header
+
+Expressions must be written either in a single line or using multiple lines, but not a mix of both.
 
 .input
 [source, pkl]
 ----
 module
  foo.bar.baz
-
 amends
  "bar.pkl"
+
+import
+ "@foo/Foo.pkl"
+  as foo
+
+local
+open
+class Bar {}
+
+const
+local
+baz = 10
+
+local
+function
+fun(x) =
+  x
+----
+
+.output
+[source, pkl]
+----
+module foo.bar.baz
+amends "bar.pkl"
+
+import "@foo/Foo.pkl" as foo
+
+local open class Bar {}
+
+const local baz = 10
+
+local function fun(x) =
+  x
+----
+
+.lineBreakInput
+[source, pkl]
+----
+module reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly.loooooooooooooooooooooooooooooooog.naaaaaaaaaaaaaaaaaaaaaaaaaame
+extends "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
+
+import "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl" as foo
+
+local open class LoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooongName {}
+
+local open class ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongName {}
+
+const hidden loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName = 99
+
+const hidden reallyLoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName = 99
+
+const local function looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(x: Int, y) = x + y
+
+const local function reallyLooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(x: Int, y) = x + y
+----
+
+.lineBreakOutput
+[source, pkl]
+----
+module
+  reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly
+    .loooooooooooooooooooooooooooooooog
+    .naaaaaaaaaaaaaaaaaaaaaaaaaame
+extends
+  "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
+
+import
+  "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
+  as foo
+
+local open
+class LoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooongName {}
+
+local open
+class
+  ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongName
+  {}
+
+const hidden
+loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName = 99
+
+const hidden
+reallyLoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName
+  = 99
+
+const local
+function looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
+  x: Int,
+  y
+) = x + y
+
+const local
+function
+  reallyLooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
+  x: Int,
+  y
+) = x + y
+----
+
+==== [0005] Module definitions
+
+There must be no empty lines between a module and an amend/extend definition.
+
+.input
+[source, pkl]
+----
+module foo.bar.baz
+
+amends "bar.pkl"
 ----
 
 .output
@@ -247,20 +363,17 @@ module foo.bar.baz
 amends "bar.pkl"
 ----
 
-==== [0005] Imports
+==== [0006] Imports
 
-Imports should be sorted alphabetically. +
-Each import should be written in single line. +
-They should be grouped in 3 groups, in this order: absolute imports, relative imports, and project imports. +
-Each group should be separated by an empty line. +
-Imports in the same group should not be separated by an empty line.
+Imports must be sorted alphabetically. +
+They must be grouped in 3 groups, in this order: absolute imports, project imports, and relative imports. +
+Each group must be separated by an empty line. +
+Imports in the same group must not be separated by an empty line.
 
 .input
 [source, pkl]
 ----
-import
- "@foo/Foo.pkl"
-  as foo
+import "@foo/Foo.pkl" as foo
 import* "**.pkl"
 
 import "package://example.com/myPackage@1.0.0#/Qux.pkl"
@@ -277,14 +390,14 @@ import "@bar/Bar.pkl"
 import "https://example.com/baz.pkl"
 import "package://example.com/myPackage@1.0.0#/Qux.pkl"
 
-import* "**.pkl"
-import "..."
-
 import "@bar/Bar.pkl"
 import "@foo/Foo.pkl" as foo
+
+import* "**.pkl"
+import "..."
 ----
 
-==== [0006] Module and class members
+==== [0007] Module and class members
 
 Module and class members must be separated by exactly one empty line.
 
@@ -314,7 +427,7 @@ class Foo {
 }
 ----
 
-==== [0007] Members within braces
+==== [0008] Members within braces
 
 Members within braces must be indented one level deeper than their parents.
 
@@ -338,20 +451,16 @@ foo {
 }
 ----
 
-==== [0008] Modifiers
+==== [0009] Modifiers
 
-Modifiers must be written in the same line as what they are modifying, except if they go over the maximum line limit. +
 Modifiers must be ordered alphabetically.
 
 .input
 [source, pkl]
 ----
-hidden
-const
-foo = 1
+hidden const foo = 1
 
-open
-local class Foo {}
+open local class Foo {}
 ----
 
 .output
@@ -360,31 +469,6 @@ local class Foo {}
 const hidden foo = 1
 
 local open class Foo {}
-----
-
-==== [0009] Class header
-
-The class header must be written in a single line if it doesn't go over the maximum line limit.
-
-.input
-[source, pkl]
-----
-local
-open
-class Foo
-extends Bar {
-}
-
-class ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongClassName extends Bar {}
-----
-
-.output
-[source, pkl]
-----
-local open class Foo extends Bar {}
-
-class ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongClassName
-  extends Bar {}
 ----
 
 ==== [0010] Object and class bodies
