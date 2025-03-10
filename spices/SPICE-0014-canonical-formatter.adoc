@@ -237,7 +237,9 @@ The following constructs must be written in a single line, if they don't go over
 - Property header
 - Function header
 
-Expressions must be written either in a single line or using multiple lines, but not a mix of both.
+Expressions must be written either in a single line or using multiple lines, but not a mix of both. +
+Parameters, type parameters, and method arguments that don't fit a single line must be indented and written
+in separate lines with a trailing comma.
 
 .input
 [source, pkl]
@@ -263,6 +265,10 @@ local
 function
 fun(x) =
   x
+
+local function function2(parameter1: Parameter1Type, parameter2: Parameter2Type, parameter3: Parameter3Type, parameter4: Parameter4Type): String = ""
+
+prop = function2(loooooooooooooooooogParameter1, loooooooooooooooooogParameter2, loooooooooooooooooogParameter3, loooooooooooooooooogParameter4)
 ----
 
 .output
@@ -279,6 +285,21 @@ const local baz = 10
 
 local function fun(x) =
   x
+
+local function function2(
+  parameter1: Parameter1Type,
+  parameter2: Parameter2Type,
+  parameter3: Parameter3Type,
+  parameter4: Parameter4Type
+): String = ""
+
+prop =
+  function2(
+    loooooooooooooooooogParameter1,
+    loooooooooooooooooogParameter2,
+    loooooooooooooooooogParameter3,
+    loooooooooooooooooogParameter4
+  )
 ----
 
 .lineBreakInput
