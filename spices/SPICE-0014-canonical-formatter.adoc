@@ -32,7 +32,7 @@ code differently, they can use other tools that allow customization.
 
 The standard library and https://github.com/apple/pkl-pantry[pkl-pantry] will be formatted using `pkl format`.
 
-Syntactically invalid modules cannot be formated. They will return an error when called via the CLI or the Java API.
+Syntactically invalid modules cannot be formatted. They will return an error when called via the CLI or the Java API.
 A syntactically invalid module is considered to have formatting issues.
 
 The formatter will not simplify code. Many of these simplifications are not possible with only parsing information
@@ -178,6 +178,7 @@ A space must be added
 - Around infix operators
 - After a comma
 - After a colon
+- After a semicolon
 - After a line, block, or doc comment start (`//`, `///`, `/*`)
 - Before the opening parentheses in control operators like `if`, `for`, `when`
 
@@ -586,10 +587,9 @@ lineIsTooBig: Listing<Int> = new {
 
 ==== [0013] Expressions
 
-Expression must either be defined in a single line on in separated lines. +
 If an expression spans multiple lines there must be a new line after the `=`. +
 If the expression is a `new` or amending expression it should start in the same line as the `=`. +
-Operators separated by a new line must be written in the same as the left operand.
+Operators separated by a new line must be written in the same line as the left operand.
 
 .input
 [source, pkl]
@@ -700,7 +700,9 @@ baz =
 ==== [0016] Let expressions
 
 The expression following the let must be on its own line, and it must be indented. +
-A let followed by another let must not be indented.
+A let followed by another let must not be indented. +
+If the binding expression spans multiple lines, the opening and closing parentheses
+must be on their own line and the whole binding must be indented.
 
 .input
 [source, pkl]
@@ -712,6 +714,11 @@ bar =
   let (x = 1)
     let (y = 2)
       x + y
+
+baz =
+  let (value = prop1
+  .prop2.fun(1))
+    value
 ----
 
 .input
@@ -725,6 +732,15 @@ bar =
   let (x = 1)
   let (y = 2)
     x + y
+
+baz =
+  let (
+    value =
+      prop1
+        .prop2
+        .fun(1)
+  )
+    value
 ----
 
 ==== [0017] Doc comments
@@ -792,13 +808,16 @@ typealias NonEmptyString = String(!isEmpty)
 
 ==== [0020] Chained methods and properties
 
-Chains of methods and properties must be separated into a new indented line containing the dot. +
+Chains of methods and properties can be written in a single line if it doesn't go over the maximum line limit. +
+Chains that don't fit a single line or that already span multiple lines must be separated into a new indented line containing the dot.
 
 .input
 [source, pkl]
 ----
 foo = bar.baz.
   qux(1)
+
+prop = bar.baz.qux(1)
 ----
 
 .input
@@ -808,6 +827,8 @@ foo =
   bar
     .baz
     .qux(1)
+
+prop = bar.baz.qux(1)
 ----
 
 ==== [0021] Annotations
