@@ -285,7 +285,11 @@ bytes2 = Bytes("AQIDBA==")
 bytes3: Bytes = bytes1 + bytes2
 ----
 
-==== Modifying bytes
+==== Manipulating bytes
+
+`Bytes` is a wrapper class around an underlying list of bytes.
+
+The underlying bytes can be manipulated by accessing its `value`.
 
 NOTE: Although this is possible, Pkl is not efficient at manipulating byte arrays. If heavy computing is needed here, Pkl is likely not the correct tool for this, and should be implemented in terms of `read()` with a custom module reader.
 
@@ -293,7 +297,7 @@ NOTE: Although this is possible, Pkl is not efficient at manipulating byte array
 ----
 bytes1: Bytes
 
-bytes2 = Bytes(bytes1.toList().take(4))
+bytes2 = Bytes(bytes1.value.take(4))
 ----
 
 ==== String conversions
@@ -349,7 +353,47 @@ The new names added are:
 
 == Future directions
 
-N/A
+=== Binary Value Renderers
+
+One of the upcoming Pkl roadmap items is to have an in-language renderer and parser that works with Pkl Binary Format.
+
+The existence of a `Bytes` type sets up for such a renderer. Imagined API:
+
+[source,pkl]
+----
+class PklBinaryRenderer {
+  function renderDocument(value: Any): Bytes
+
+  function renderValue(value: Any): Bytes
+}
+----
+
+This also allows for other binary renderers (for example, msgpack renderer, binary plist renderer).
+
+Possibly, a binary value renderer can be used in conjunction with a module's output.
+
+The existing module output can be re-defined as:
+
+[source,pkl]
+----
+hidden output: ModuleOutput = new {
+  text =
+    if (renderer is BinaryValueRenderer) super.text
+    else renderer.renderDocument(value)
+  bytes =
+    if (renderer is BinaryValueRenderer) renderer.renderBytes(value)
+    else super.bytes
+}
+----
+
+=== `List<UInt8>` optimizations
+
+Pkl can possibly optimize `List<UInt8>` specifically by representing the underlying data as a byte array.
+
+This means that Pkl uses less memory (bytes can be stored as actual Java `byte[]`), and possibly less CPU for byte-level
+manipulation.
+
+Here is a branch that explores this optimization: https://github.com/bioball/pkl/tree/vm-byte-array-list.
 
 == Alternatives considered
 
