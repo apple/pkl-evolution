@@ -94,9 +94,15 @@ external const function Bytes(from: List<UInt8>|String(isBase64)): Bytes
 
 The string representation of `Bytes` will be `Bytes("<base64-contents>")`.
 
-Bytes can be compared using the `==` and `!=` operators, and concatenated using the `+` operator.
-
+Bytes can be compared using the `==` and `!=` operators.
 All other operators are not compatible with bytes.
+
+==== `Bytes` is a wrapper
+
+The `Bytes` class is a wrapper type, and cannot be used as a byte array.
+`Bytes` cannot be concatenated, nor have individual bytes accessed via subscript, nor iterated over with a for generator.
+
+To work with the underlying bytes, access its `value`.
 
 ==== `String` class
 
