@@ -93,7 +93,7 @@ Generic rules (bigger numbers) overrule previously defined ones, if they conflic
 
 ==== [0001] Line Width
 
-Lines must be a maximum of 100 characters long. Exceptions are string literals, variable names, and doc comments.
+Lines must be a maximum of 100 characters long. Exceptions are string literals, identifiers, and doc comments.
 
 .input
 [source, pkl]
