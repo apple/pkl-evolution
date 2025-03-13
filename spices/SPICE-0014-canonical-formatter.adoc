@@ -236,6 +236,7 @@ The following constructs must be written in a single line, if they don't go over
 - Class header
 - Property header
 - Function header
+- Type
 
 Expressions must be written either in a single line or using multiple lines, but not a mix of both. +
 Parameters, type parameters, and method arguments that don't fit a single line must be indented and written
@@ -269,6 +270,10 @@ fun(x) =
 local function function2(parameter1: Parameter1Type, parameter2: Parameter2Type, parameter3: Parameter3Type, parameter4: Parameter4Type): String = ""
 
 prop = function2(loooooooooooooooooogParameter1, loooooooooooooooooogParameter2, loooooooooooooooooogParameter3, loooooooooooooooooogParameter4)
+
+prop2: String
+  |Int
+  |Boolean
 ----
 
 .output
@@ -300,6 +305,8 @@ prop =
     loooooooooooooooooogParameter3,
     loooooooooooooooooogParameter4
   )
+
+prop2: String|Int|Boolean
 ----
 
 .lineBreakInput
@@ -321,6 +328,10 @@ const hidden reallyLoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
 const local function looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(x: Int, y) = x + y
 
 const local function reallyLooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(x: Int, y) = x + y
+
+typealias Foo = LooooooooooooooooooooooooongTypeName|AnotherLooooooooooooooooooooooooongTypeName|OtherLooooooooooooooooooooooooongTypeName
+
+bar: Boolean|Mapping<LooooooooooooooooooooooooongTypeName, AnotherLooooooooooooooooooooooooongTypeName>(loooooooooooooooooooogConstraint)
 ----
 
 .lineBreakOutput
@@ -364,6 +375,18 @@ function
   x: Int,
   y
 ) = x + y
+
+typealias Foo =
+  LooooooooooooooooooooooooongTypeName
+  |AnotherLooooooooooooooooooooooooongTypeName
+  |OtherLooooooooooooooooooooooooongTypeName
+
+bar:
+  Boolean
+  |Mapping<
+    LooooooooooooooooooooooooongTypeName,
+    AnotherLooooooooooooooooooooooooongTypeName
+  >(loooooooooooooooooooogConstraint)
 ----
 
 ==== [0005] Module definitions
