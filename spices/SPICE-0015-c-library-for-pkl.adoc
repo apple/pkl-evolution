@@ -32,28 +32,38 @@ Pkl already has a https://pkl-lang.org/main/current/bindings-specification/messa
 .native_pkl_interface.c
 [source,c]
 ----
-// The Pkl Message Response Handler that a user should implement.
-//
-// The resulting messages from `pkl_send` will be sent to this
-// handler using a callback style.
+/**
+* @brief The Pkl Message Response Handler that a user should implement.
+*
+* The resulting messages from `pkl_send` will be sent to this
+* handler using a callback style.
+*/
 typedef void (*PklMessageResponseHandler)(int length, char* message);
 
-// Initialises and allocates a Pkl executor.
-//
-// Returns 0 on success, or a non-zero value on failure.
+/**
+* @brief Initialises and allocates a Pkl executor.
+*
+* @return non-zero value on failure.
+* @return 0 on success.
+*/
 int pkl_init();
 
-// Send a message to Pkl, providing the length and a pointer to the first byte.
-//
-// Returns:
-//   - -1 if the Pkl executor hasn't been initialised.
-//   - 0 on success
+/**
+* @brief Send a message to Pkl, providing the length and a pointer to the first byte.
+*
+* @return -1 if the Pkl executor hasn't been initialised.
+* @return 0 on success.
+*/
 int pkl_send_message(int length, char* message);
 
-// Registers a Message Handler that will receive the result of Pkl executions.
+/**
+* @brief Registers a Message Handler that will receive the result of Pkl executions.
+*/
 void pkl_register_response_handler(PklMessageResponseHandler handler);
 
-// Cleans up any resources that were created as part of the `pkl_init` process.
+/**
+* @brief Cleans up any resources that were created as part of the `pkl_init` process.
+*/
 int pkl_close();
 ----
 
