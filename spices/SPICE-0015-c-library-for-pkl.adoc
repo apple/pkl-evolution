@@ -41,7 +41,7 @@ typedef void (*PklMessageResponseHandler)(int length, char* message);
 // Initialises and allocates a Pkl executor.
 //
 // Returns -1 if there was insufficient memory.
-int pkl_init(pkl_options_t *options);
+int pkl_init();
 
 // Send a message to Pkl, providing the length and a pointer to the first byte.
 //
