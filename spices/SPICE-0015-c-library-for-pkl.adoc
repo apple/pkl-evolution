@@ -1,0 +1,77 @@
+= C library for Pkl
+
+* Proposal: link:./SPICE-0015-c-library-for-pkl.adoc[SPICE-0015]
+* Author: https://github.com/kushalp[Kushal Pisavadia]
+* Status: TBD
+* Implemented in: Pkl <TBD>
+* Category: Language
+
+== Introduction
+
+This SPICE proposes a native C library for Pkl that can be used to implement native bindings from other languages such as Swift, Go, or Python.
+
+This would allow bindings such as `pkl-swift` and `pkl-go` to bind to Pkl without needing to spawn a child process.
+
+== Motivation
+
+By offering C bindings, Pkl can increase its utility and applicability across more domains, attracting a broader developer base.
+These bindings would also allow language integrations to have a much smaller footprint than existing approaches requiring an external process.
+
+== Proposed Solution
+
+A new shared library will be produced that allows users to initialise a Pkl evaluator, send messages to it, and receive messages from it.
+
+== Detailed design
+
+We would utilise the https://www.graalvm.org/latest/reference-manual/native-image/guides/build-native-shared-library/[native shared library functionality] of `native-image` to build upon the existing code that we already have.
+
+However, as we’re exposing a C API to our users, we shouldn’t expose GraalVM behaviours for future-compatibility.
+
+Pkl already has a https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html[Message Passing API] with MsgPack that we can utilise here.
+
+.native_pkl_interface.c
+[source,c]
+----
+// The Pkl Message Response Handler that a user should implement.
+//
+// The resulting messages from `pkl_send` will be sent to this
+// handler using a callback style.
+typedef void (*PklMessageResponseHandler)(int length, char* message);
+
+// Initialises and allocates a Pkl executor.
+//
+// Returns -1 if there was insufficient memory.
+int pkl_init(pkl_options_t *options);
+
+// Send a message to Pkl, providing the length and a pointer to the first byte.
+//
+// Returns:
+//   - -1 if the Pkl executor hasn't been initialised.
+//   - 0 on success
+int pkl_send_message(int length, char* message);
+
+// Registers a Message Handler that will receive the result of Pkl executions.
+void pkl_register_response_handler(PklMessageResponseHandler handler);
+
+// Cleans up any resources that were created as part of the `pkl_init` process.
+int pkl_close();
+----
+
+== Compatibility
+
+The biggest concerns around the supported (dynamic library) approach by `native-image`  would be the number of dynamic libraries we'd require present on the target instance.
+We should strive to reduce the number of dynamic libraries required where possible.
+
+One option could be to create a static shared library, which is suggested as part of this issue and would need to be investigated: https://github.com/oracle/graal/issues/3053
+
+== Future directions
+
+https://openjdk.org/jeps/472[JEP 472: Prepare to Restrict the Use of JNI] is coming to JDK24 and may be relevant in the future.
+
+== Alternatives considered
+
+TBD
+
+== Acknowledgements
+
+N/A
