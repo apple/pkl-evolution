@@ -1,0 +1,96 @@
+= C library for Pkl
+
+* Proposal: link:./SPICE-0015-c-library-for-pkl.adoc[SPICE-0015]
+* Author: https://github.com/kushalp[Kushal Pisavadia]
+* Status: TBD
+* Implemented in: Pkl <TBD>
+* Category: Language
+
+== Introduction
+
+This SPICE proposes a native C library for Pkl that can be used to implement native bindings from other languages such as Swift, Go, or Python.
+
+This would allow bindings such as `pkl-swift` and `pkl-go` to bind to Pkl without needing to spawn a child process.
+
+== Motivation
+
+By offering C bindings, Pkl can increase its utility and applicability across more domains, attracting a broader developer base.
+These bindings would also allow language integrations to have a much smaller footprint than existing approaches requiring an external process.
+
+== Proposed Solution
+
+A new shared library will be produced that allows users to initialise a Pkl evaluator, send messages to it, and receive messages from it.
+
+== Detailed design
+
+We would utilise the https://www.graalvm.org/latest/reference-manual/native-image/guides/build-native-shared-library/[native shared library functionality] of `native-image` to build upon the existing code that we already have.
+
+However, as we’re exposing a C API to our users, we shouldn’t expose GraalVM behaviours for future-compatibility.
+
+Pkl already has a https://pkl-lang.org/main/current/bindings-specification/message-passing-api.html[Message Passing API] with MsgPack that we can utilise here.
+
+.native_pkl_interface.c
+[source,c]
+----
+/**
+ * The callback that gets called when a message is received from Pkl.
+ *
+ * @param length    The length the message bytes
+ * @param message   The message itself
+ * @param userData  User-defined data passed in from pkl_init.
+ */
+typedef void (*PklMessageResponseHandler)(int length, char *message, const void *userData);
+
+/**
+ * Initialises and allocates a Pkl executor.
+ *
+ * @param handler   The callback that gets called when a message is received from Pkl.
+ * @param userData  User-defined data that gets passed to handler.
+ *
+ * @return -1 on failure, 0 on success.
+ */
+int pkl_init(PklMessageResponseHandler handler, void *userData);
+
+/**
+ * Send a message to Pkl, providing the length and a pointer to the first byte.
+ *
+ * @param length    The length of the message, in bytes.
+ * @param message   The message to send to Pkl.
+ *
+ * @return -1 on failure, 0 on success.
+ */
+int pkl_send_message(int length, char *message);
+
+/**
+ * Cleans up any resources that were created as part of the `pkl_init` process.
+ *
+ * @return -1 on failure, 0 on success.
+ */
+int pkl_close();
+
+/**
+ * Returns the version of Pkl in use.
+ *
+ * @return a string with the version information.
+ */
+char* pkl_version();
+----
+
+== Compatibility
+
+The biggest concerns around the supported (dynamic library) approach by `native-image`  would be the number of dynamic libraries we'd require present on the target instance.
+We should strive to reduce the number of dynamic libraries required where possible.
+
+One option could be to create a static shared library, which is suggested as part of this issue and would need to be investigated: https://github.com/oracle/graal/issues/3053
+
+== Future directions
+
+https://openjdk.org/jeps/472[JEP 472: Prepare to Restrict the Use of JNI] is coming to JDK24 and may be relevant in the future.
+
+== Alternatives considered
+
+TBD
+
+== Acknowledgements
+
+N/A
