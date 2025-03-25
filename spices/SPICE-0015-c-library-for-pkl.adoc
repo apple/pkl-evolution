@@ -43,7 +43,7 @@ typedef void (*PklMessageResponseHandler)(int length, char* message);
 /**
 * @brief Initialises and allocates a Pkl executor.
 *
-* @return non-zero value on failure.
+* @return -1 on failure.
 * @return 0 on success.
 */
 int pkl_init(PklMessageResponseHandler handler);
@@ -51,13 +51,16 @@ int pkl_init(PklMessageResponseHandler handler);
 /**
 * @brief Send a message to Pkl, providing the length and a pointer to the first byte.
 *
-* @return -1 if the Pkl executor hasn't been initialised.
+* @return -1 on failure.
 * @return 0 on success.
 */
 int pkl_send_message(int length, char* message);
 
 /**
 * @brief Cleans up any resources that were created as part of the `pkl_init` process.
+*
+* @return -1 on failure.
+* @return 0 on success.
 */
 int pkl_close();
 ----
