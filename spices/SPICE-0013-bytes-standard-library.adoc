@@ -4,7 +4,7 @@
 * Author: https://github.com/bioball[Dan Chao]
 * Status: TBD
 * Implemented in: TBD
-* Category: Standard Library
+* Category: Language, Standard Library
 
 == Introduction
 
@@ -33,14 +33,17 @@ The following changes will be made to the standard library
 ==== `Bytes` class
 
 A new class will be added to `pkl:base`, called `Bytes`.
-This will be a new value type, similar to `Duration` and `DataSize`.
+This will be a new value type, similar to `List`, `Map`, and `IntSeq`.
 
 [source,pkl]
 ----
 @Since { version = "0.29.0" }
 external class Bytes extends Any {
-  /// The value of these bytes.
-  external value: List<UInt8>
+  /// The length of these bytes.
+  external length: Int
+
+  /// The number of bytes as [DataSize].
+  external size: DataSize
 
   /// The value represented by these bytes, in base64 encoding.
   external base64: String(isBase64)
@@ -66,45 +69,173 @@ external class Bytes extends Any {
   /// these bytes.
   external sha256Int: Int
 
-  /// Converts these bytes into a string using UTF-8 encoding.
-  external function encodeToString(): String
+  /// Returns the element at [index].
+  ///
+  /// Returns [null] if [index] is outside the bounds of these Bytes.
+  ///
+  /// Facts:
+  /// ```
+  /// Bytes(3, 9, 6).getOrNull(0) == 3
+  /// Bytes(3, 9, 6).getOrNull(1) == 9
+  /// Bytes(3, 9, 6).getOrNull(2) == 6
+  /// Bytes(3, 9, 6).getOrNull(-1) == null
+  /// Bytes(3, 9, 6).getOrNull(3) == null
+  /// Bytes(3, 9, 6).getOrNull(99) == null
+  /// ```
+  external function getOrNull(index: Int): UInt8?
 
   /// Converts these bytes into a string, encoded using [charset].
-  external function encodeToStringWithCharset(charset: Charset): String
+  ///
+  /// Throws if these bytes are invalid according to the given [charset].
+  external function decodeToString(charset: Charset): String
+
+  /// Converts these bytes into a [List].
+  external function toList(): List<UInt8>
 }
 ----
 
 Bytes are built using the `Bytes` constructor method.
+Like `List`, `Set` and `Map`, the constructor receives a variable number of arguments.
 
 [source,pkl]
 ----
-/// Creates [Bytes] from either a list of ints, or a Base64 encoded string.
+/// Creates [Bytes] from the given numbers.
 ///
 /// Examples:
 /// ```
-/// // Create Bytes from integer literals
-/// bytes1 = Bytes(List(1, 2, 3, 4))
-///
-/// // Create Bytes from a Base64 encoded string
-/// bytes2 = Bytes("AQIDBA==")
+/// bytes = Bytes(0x1, 0x2, 0x3, 0x4)
 /// ```
 @Since { version = "0.29.0" }
-external const function Bytes(from: List<UInt8>|String(isBase64)): Bytes
+external const function Bytes(values: VarArgs<UInt8>): Bytes
 ----
 
-The string representation of `Bytes` will be `Bytes("<base64-contents>")`.
+=== `toString()`
+
+The string representation of `Bytes` will be `Bytes(<numbers>)`.
+For example, bytes `0x1`, `0x2`, `0x3`, `0x4` is rendered as `Bytes(1, 2, 3, 4)`.
+
+=== In-language value renderer
+
+When bytes are rendered in-language (for example, in error messages), they are possibly truncated, with the size of the bytes shown.
+
+[source]
+----
+–– Pkl Error ––
+Type constraint `myConstraint` failed.
+
+Value: Bytes(1, 2, 3, 4, 5, 6, 7, 8, ... <5.2.mb more bytes>)
+----
+
+At most 8 bytes are shown, and the rest is truncated.
+
+This rendering is used for error messages, and also for REPL output.
+
+=== Comparison
 
 Bytes can be compared using the `==` and `!=` operators.
-All other operators are not compatible with bytes.
 
-==== `Bytes` is a wrapper
+Two `Bytes` are considered equal if they have the same length, and if numbers are sequentially equivalent.
 
-The `Bytes` class is a wrapper type, and cannot be used as a byte array.
-`Bytes` cannot be concatenated, nor have individual bytes accessed via subscript, nor iterated over with a for generator.
+[source,pkl]
+----
+facts {
+  Bytes() == Bytes()
+  Bytes(1, 2, 3) == Bytes(1, 2, 3)
+  Bytes(1, 2, 3) != Bytes(1, 2, 4)
+  Bytes() != Set()
+}
+----
 
-To work with the underlying bytes, access its `value`.
+=== Subscript
 
-==== `String` class
+Elements of `Bytes` can be accessed using subscript, where the subscript receives an integer index.
+
+The result of subscript is a `UInt8`, or throws an exception if the index if out of bounds.
+
+[source,pkl]
+----
+bytes = Bytes(1, 2, 3, 4)
+res1 = bytes[0]
+res2 = bytes[1]
+----
+
+Possibly out-of-bounds access can be guarded using `getOrNull`:
+
+[source,pkl]
+----
+bytes = Bytes(1, 2, 3, 4)
+res1 = bytes.getOrNull(5) // <1>
+res2 = bytes.getOrNull(2) // <2>
+----
+<1> Result: `null`
+<2> Result: `3`
+
+=== Concatenation
+
+Two `Bytes` values can be concatenated using `+`, producing a the combined result of both values.
+
+[source,pkl]
+----
+Bytes(1, 2, 3, 4) + Bytes(5, 6, 7, 8) // <1>
+----
+<1> Result: `Bytes(1, 2, 3, 4, 5, 6, 7, 8)`
+
+=== Generators
+
+`Bytes` can be iterated over by a for-generator, and spread syntax.
+
+For-generators receive an integer key, and a `UInt8` value.
+
+The following code:
+
+[source,pkl]
+----
+bytes: Bytes = Bytes(1, 2, 3, 4)
+
+elems {
+  for (idx, elem in bytes) {
+    "My index is \(idx), and my byte is \(elem)"
+  }
+}
+
+elems2 {
+  ...bytes
+}
+----
+
+Produces the following PCF:
+
+[source,pkl]
+----
+bytes = Bytes(1, 2, 3, 4)
+elems {
+  "My index is 0, and my byte is 1"
+  "My index is 1, and my byte is 2"
+  "My index is 2, and my byte is 3"
+  "My index is 3, and my byte is 4"
+}
+elems2 {
+  1
+  2
+  3
+  4
+}
+----
+
+`Bytes` can only be spread into `Dynamic` or `Listing`.
+Spreading into a `Mapping` or `Typed` is an error.
+
+[source,pkl]
+----
+bytes = Bytes(1, 2, 3, 4)
+
+mapping: Mapping = new {
+  ...bytes // <1>
+}
+----
+<1> Error: cannot spread value of type `Bytes` into object of type `Mapping`.
+
+=== `String` class
 
 The `String` class will receive the following new members:
 
@@ -123,17 +254,34 @@ class String {
   @Since { version = "0.29.0" }
   external isBase64: Boolean
 
-  /// Returns the bytes of this string, encoded using UTF-8.
+  /// Returns the bytes of this string, encoded using [charset]. 
+  ///
+  /// Facts:
+  /// ```
+  /// "Parrot".encodeToBytes("UTF-8") == Bytes(80, 97, 114, 114, 111, 116)
+  /// ```
   @Since { version = "0.29.0" }
-  function toBytes(): Bytes = toBytesWithCharset("UTF-8")
-
-  /// Returns the bytes of this string, encoded using [charset].
-  @Since { version = "0.29.0" }
-  external function toBytesWithCharset(charset: Charset): Bytes
+  function encodeToBytes(charset: Charset): Bytes
 }
 ----
 
-==== `Charset` typealias
+=== `List` class
+
+The `List` class will receive the following new members:
+
+[source,pkl]
+----
+external class List<out Element> extends Collection<Element> {
+  /* etc */
+
+  /// Converts this list to [Bytes].
+  ///
+  /// Throws a type error if any elements are not [UInt8].
+  external function toBytes(): Bytes
+}
+----
+
+=== `Charset` typealias
 
 A new typealias called `Charset` will be added to the base module.
 
@@ -143,7 +291,7 @@ A new typealias called `Charset` will be added to the base module.
 typealias Charset = "UTF-8"|"UTF-16"|"ISO-8859-1"
 ----
 
-==== `Resource` class
+=== `Resource` class
 
 The following property will be added to the `Resource` class.
 
@@ -160,7 +308,7 @@ class Resource {
 
 Additionally, the existing properties `base64`, `md5`, `sha1`, `sha256`, `sha256Int` are deprecated, and to be replaced by calling the same properties on `bytes`, or setting `bytes` (in the case of `base64`).
 
-==== `FileOutput` class
+=== `FileOutput` class
 
 A new property is added to the `FileOutput` class, called `bytes`.
 It defaults to the UTF-8 bytes of `text`.
@@ -190,14 +338,14 @@ The following Pkl:
 
 [source,pkl]
 ----
-res = Bytes("AQIDBA==")
+res = Bytes(1, 2, 3, 4)
 ----
 
 Produces the following PCF:
 
 [source,pkl]
 ----
-res = Bytes("AQIDBA==")
+res = Bytes(1, 2, 3, 4)
 ----
 
 Produces the following Plist:
@@ -257,7 +405,7 @@ This change means that it is possible for Pkl to write any content, not just UTF
 
 === Changes to `org.pkl.core.Evaluator`
 
-The `evaluateExpression` method will map Pkl type `Byte` to `byte[]` in Java.
+The `evaluateExpression` method will map Pkl type `Bytes` to `byte[]` in Java.
 
 A new method will be added, called `evaluateOutputBytes`, which evaluates the `output.bytes` of a module.
 
@@ -278,10 +426,10 @@ interface Evaluator {
 [source,pkl]
 ----
 // From a list
-bytes1 = Bytes(List(1, 2, 3, 4))
+bytes1 = Bytes(1, 2, 3, 4)
 
 // From a base64-encoded string
-bytes2 = Bytes("AQIDBA==")
+bytes2 = "AQIDBA==".base64DecodedBytes
 ----
 
 ==== Concatenating two `Bytes`
@@ -291,26 +439,26 @@ bytes2 = Bytes("AQIDBA==")
 bytes3: Bytes = bytes1 + bytes2
 ----
 
-==== Manipulating bytes
+==== Transforming bytes
 
-`Bytes` is a wrapper class around an underlying list of bytes.
+`Bytes` is optimized for access, and not for transformations.
 
-The underlying bytes can be manipulated by accessing its `value`.
-
-NOTE: Although this is possible, Pkl is not efficient at manipulating byte arrays. If heavy computing is needed here, Pkl is likely not the correct tool for this, and should be implemented in terms of `read()` with a custom module reader.
+Transformations can be done by converting to `List`.
 
 [source,pkl]
 ----
 bytes1: Bytes
 
-bytes2 = Bytes(bytes1.value.take(4))
+bytes2: Bytes = bytes1.toList().take(4).toBytes()
 ----
 
 ==== String conversions
 
 [source,pkl]
 ----
-myStr = Bytes("SGVsbG8gdGhlcmU=").encodeToString() // "Hello there"
+bytes: Bytes = Bytes(80, 97, 114, 114, 111, 116)
+
+myStr: String = bytes.decodeToString("UTF-8") // "Parrot"
 ----
 
 ==== Set raw file output
@@ -331,12 +479,11 @@ output {
 [source,pkl]
 ----
 local certText = read("path/to/my/cert.pem").text
-local certificateBytes = Bytes(
-  certText
-    .replaceFirst("-----BEGIN CERTIFICATE-----", "")
-    .replaceLast("-----END CERTIFICATE-----", "")
-    .replaceAll("\n", "")
-)
+local certificateBytes = certText
+  .replaceFirst("-----BEGIN CERTIFICATE-----", "")
+  .replaceLast("-----END CERTIFICATE-----", "")
+  .replaceAll("\n", "")
+  .base64DecodedBytes
 fingerprint = certificateBytes.sha256
 ----
 
@@ -367,14 +514,14 @@ The existence of a `Bytes` type sets up for such a renderer. Imagined API:
 
 [source,pkl]
 ----
-class PklBinaryRenderer {
+class BinaryValueRenderer {
   function renderDocument(value: Any): Bytes
 
   function renderValue(value: Any): Bytes
 }
 ----
 
-This also allows for other binary renderers (for example, msgpack renderer, binary plist renderer).
+This also allows for other binary renderers (for example, msgpack renderer, binary plist renderer, protobuf renderer).
 
 Possibly, a binary value renderer can be used in conjunction with a module's output.
 
@@ -392,14 +539,16 @@ hidden output: ModuleOutput = new {
 }
 ----
 
-=== `List<UInt8>` optimizations
+=== Additional methods on `Bytes`
 
-Pkl can possibly optimize `List<UInt8>` specifically by representing the underlying data as a byte array.
+`Bytes` intentionally does not provide methods for transformations.
+While this can be useful, these use-cases are not commonly aligned with Pkl's goal of being used for configuration.
 
-This means that Pkl uses less memory (bytes can be stored as actual Java `byte[]`), and possibly less CPU for byte-level
-manipulation.
+Thus, methods like `map`, `flatMap`, `filter`, etc, are omitted.
+Instead, users are expected to cast to `List` and back to `Bytes` as a workaround.
 
-Here is a branch that explores this optimization: https://github.com/bioball/pkl/tree/vm-byte-array-list.
+If a sufficient need for this arises in the future, these methods can be implemented.
+Additionally, `Bytes` can perhaps be another subclass of `Collection` (the superclass of `Set` and `List`).
 
 == Alternatives considered
 
@@ -420,6 +569,74 @@ These semantics are not useful for byte arrays.
 Furthermore, libraries would have additional overhead.
 For example, the Java API would expose any `Bytes` values as a `PObject`.
 Additionally, the Pkl Binary Encoding would represent this using its existing `Typed` encoding.
+
+=== `Int8` instead of `UInt8`
+
+Bytes are commonly represented in hexadecimal notation, from `0x00` to `0xff`.
+
+Some languages, like Java, interop from bytes into signed int types.
+For example, casting a byte to an int can possibly produce a negative integer:
+
+[source,java]
+----
+byte b = (byte) 0xc0;
+int i = (int) b;
+System.out.println(i); // <1>
+----
+<1> Prints `-64`.
+
+Here, value `0xc0` is treated as a https://en.wikipedia.org/wiki/Two%27s_complement[two's complement] signed 8-bit integer.
+
+In Pkl, `0xc0` is always equivalent to `192`.
+If `Bytes` were treated as a sequence of `Int8` numbers, the expression `Bytes(0xc0)` would error, because 196 is greater than `Int8` bounds.
+However, this would be at odds with how bytes are commonly described.
+
+=== Bytes as a wrapper
+
+Conceptually, `Bytes` and `List<UInt8>`/`Listing<UInt8>` are all sequences of `UInt8` numbers.
+They both allows subscript access, and iteration via generators.
+
+To avoid this duplication, `Bytes` can simply be a wrapper class, where it is only used to semantically identify when values should be treated as binary data.
+The underlying data would be processed by unwrapping.
+
+[source,pkl]
+----
+class Bytes {
+  data: List<UInt8>
+}
+----
+
+However, there are some drawbacks to this approach.
+
+==== Heap space
+
+A quick profile shows that allocating 1000 numbers in a `List` takes 5.4Kb of heap space when run in the JVM.
+The implementation of `List` incurs some overhead for each member, and this is quite expensive when each member is only byte-sized.
+
+In contrast, `Bytes` is a specialized class that can be compactly stored, with heap usage largely mirroring the amount of allocated in-language bytes.
+
+==== Specializing `List<UInt8>` is challenging
+
+In theory, `List<UInt8>` can also be specialized into a contiguous byte array.
+However, Pkl's model makes this type of specialization challenging.
+In particular, Pkl doesn't actually use differently sized integers; all integers are values of class `Integer`.
+
+It's possible to specialize `List<UInt8>` if Pkl's evaluation is guided by type annotations.
+However, it's easy to de-specialize:
+
+[source,pkl]
+----
+// okay; can specialize here
+foo: List<UInt8> = List(1, 2, 3, 4) 
+
+// can no longer specialize; we don't know if the result of `map` can fit within `UInt8`
+foo2 = foo.map((it) -> it + 1) 
+----
+
+Additionally, `List` values do not retain their type parameter.
+Pkl does not know if an incoming `List` is all of type `UInt8` without checking every element.
+
+This approach was explored in https://github.com/bioball/pkl/tree/vm-byte-array-list.
 
 == Acknowledgements
 
