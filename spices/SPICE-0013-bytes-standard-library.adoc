@@ -172,7 +172,7 @@ res2 = bytes.getOrNull(2) // <2>
 
 === Concatenation
 
-Two `Bytes` values can be concatenated using `+`, producing a the combined result of both values.
+Two `Bytes` values can be concatenated using `+`, producing the combined result of both values.
 
 [source,pkl]
 ----
