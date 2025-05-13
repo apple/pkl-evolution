@@ -254,6 +254,17 @@ class String {
   @Since { version = "0.29.0" }
   external isBase64: Boolean
 
+  /// Converts this base64-format string into [Bytes].
+  ///
+  /// Throws if this is not a base64-encoded string.
+  ///
+  /// Facts:
+  /// ```
+  /// "AQIDBA==".base64DecodedBytes = Bytes(1, 2, 3, 4)
+  /// ```
+  @Since { version = "0.29.0" }
+  external base64DecodedBytes: Bytes
+
   /// Returns the bytes of this string, encoded using [charset]. 
   ///
   /// Facts:
