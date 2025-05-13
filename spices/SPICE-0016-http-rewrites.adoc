@@ -61,11 +61,11 @@ In practice, this would be a server that fetches those assets from the underlyin
 
 == Detailed design
 
-=== `org.pkl.core.http.RequestRewritingClient`
-
 Underneath the hood, Pkl makes all outbound requests using `org.pkl.core.http.RequestRewritingClient`.
 Currently, this client modifies outbound requests to add Pkl's user-agent, and optionally a port.
 This client will be modified to also rewrite the entire URI if set.
+
+The HTTP client will _not_ execute a rewrite in the case of 3XX response codes.
 
 In the case of failed requests, the thrown message includes details about the rewrite.
 
@@ -75,7 +75,30 @@ Sample message:
 ----
 Pkl Error
 An I/O error occurred when making request GET /foo:
-Connection reset (request was rewritten: https://foo.com -> https://bar.com)
+Connection reset
+
+Request was rewritten:
+  Original:  https://foo.com/foo
+  Rewritten: https://bar.com/foo
+----
+
+A rewrite rule has a case-insensitive match on schemes and hostnames.
+
+Thus, a rewrite rule of `\https://foo.com/` will match `HTTPS://FOO.COM/`, `\https://FOO.COM/`, and also `\https://foo.COM/`.
+
+NOTE: Rewrite rules must have lowercased scheme and host segments (see <<validation>>).
+
+An the case of multiple matches, the longest rewrite rule has precedence over a shorter rewrite rule.
+This means that the most specific rule wins.
+
+In the following example, `\https://example.com/foo/` is the longest and is thus used to rewrite a request to `\https://example.com/foo/qux.pkl`.
+
+[source,pkl]
+----
+rewrites {
+  ["https://example.com/foo/"] = "<rewrite1>"
+  ["https://example.com/"] = "<rewrite2>"
+}
 ----
 
 [[configuration-api]]
@@ -93,9 +116,30 @@ A new property will be added to class `pkl.EvaluatorSettings.Http`.
 .EvaluatorSettings.pkl
 [source,pkl]
 ----
+const local hostnameRegex = Regex(#"https?://([^/?#]*)"#)
+
+const local hasNonEmptyLowercaseHostname = (it: String) ->
+  let (hostname = hostnameRegex.findMatchesIn(it).getOrNull(0)?.groups?.getOrNull(1)?.value)
+    hostname != null
+      && hostname.length > 0
+      && hostname.toLowerCase() == hostname
+
+/// A key or value in [Http.rewrites].
+///
+/// Rewrite targets must satisfy the following:
+///
+/// * It starts with either `http://`, or `https://`.
+/// * It ends with `/`.
+/// * It has a non-empty and lowercased hostname.
+typealias HttpRewrite = String(
+  startsWith(Regex("https?://")),
+  endsWith("/"),
+  hasNonEmptyLowercaseHostname
+)
+
 class Http {
   @Since { version = "0.29.0" }
-  rewrites: Mapping<Uri, Uri(startsWith("http://") || startsWith("https://"))>?
+  rewrites: Mapping<HttpRewrite, HttpRewrite>?
 }
 ----
 
@@ -205,46 +249,26 @@ This flag will be available to commands that use common CLI options (for example
 All outbound requests will be checked against the `--allowed-modules` and `--allowed-resources` CLI flags, and their respective settings in other contexts.
 This is also the case with URL rewriting.
 
+[[validation]]
+=== Validation
+
+Rewrite rules have the following requirements:
+
+1. They must start with either `http://` or `https://`, and end in `/`.
+For example, this prevents a scenario where users declare a rule like `\https://foo.com`, and unintentionally match a hostname like `\https://foo.community`.
+2. Rewrite rules must also have a non-empty, lowercased scheme and hostname.
+This is because schemes and hostnames are case-insensitive, and this avoids an issue where users can specify ambiguous rewrite rules.
+
 === Error modes
 
-==== Invalid scheme
+==== Invalid rewrite rule
 
-An HTTP target URL must start with `http://` or `https://`.
-Any other scheme is an error.
+Validation is performed at the side where the rewrite rule is configured.
 
-Configuring rewrites via Pkl will surface this as an error during startup.
-
-Configuring rewrites via any other API (CLI flag, Gradle, etc) will surface this as an error when the HTTP request is attempted.
-
-[source]
-----
-–– Pkl Error ––
-Invalid URI scheme 'file'.
-
-Request was rewritten:
-  Original:  https://pkg.pkl-lang.org/pkl-k8s/k8s@1.2.1#/api/core/v1/Pod.pkl
-  Rewritten: file:///pkl-k8s/k8s@1.2.1#/api/core/v1/Pod.pkl
-
-1 | amends "package://pkg.pkl-lang.org/pkl-k8s/k8s@1.2.1#/api/core/v1/Pod.pkl"
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-----
-
-==== Invalid URI
-
-An invalid URI prefix will be surfaced as an error when the HTTP request is attempted.
-
-[source]
-----
-–– Pkl Error ––
-Module URI 'https://\foo/k8s@1.2.1#/api/core/v1/Pod.pkl' has invalid syntax.
-
-Request was rewritten:
-  Original:  https://pkg.pkl-lang.org/pkl-k8s/k8s@1.2.1#/api/core/v1/Pod.pkl
-  Rewritten: https://\foo/k8s@1.2.1#/api/core/v1/Pod.pkl
-
-1 | amends "package://pkg.pkl-lang.org/pkl-k8s/k8s@1.2.1#/api/core/v1/Pod.pkl"
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-----
+* Pkl rewrite rules (those set in `~/.pkl/settings.pkl` or `PklProject`) will be surfaced as a Pkl validation error.
+* CLI flags will be surfaced as invalid flag arguments.
+* Gradle rewrite rules will throw a `GradleException`.
+* Otherwise, an error is thrown when building the evaluator.
 
 == Compatibility
 
