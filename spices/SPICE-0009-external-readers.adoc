@@ -1,7 +1,7 @@
 = External Readers
 
 * Proposal: link:./SPICE-0009-external-readers.adoc[SPICE-0009]
-* Author: https://github.com/HT154[Josh Basch]
+* Author: https://github.com/HT154[Jen Basch]
 * Status: Accepted
 * Implemented in: Pkl 0.27
 * Category: Language
