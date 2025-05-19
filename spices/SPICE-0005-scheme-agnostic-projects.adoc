@@ -182,4 +182,4 @@ However, this adds to the API surface area, and the operation is essentially wha
 
 == Acknowledgements
 
-Credit to link:https://github.com/HT154[Joshua Basch], for doing most of the work, and providing an already working implementation to start from!
+Credit to link:https://github.com/HT154[Jen Basch], for doing most of the work, and providing an already working implementation to start from!
