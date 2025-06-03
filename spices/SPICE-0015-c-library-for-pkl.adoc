@@ -32,36 +32,40 @@ Pkl already has a https://pkl-lang.org/main/current/bindings-specification/messa
 .native_pkl_interface.c
 [source,c]
 ----
-/**
-* @brief The Pkl Message Response Handler that a user should implement.
 *
-* The resulting messages from `pkl_send` will be sent to this
-* handler using a callback style.
-*/
-typedef void (*PklMessageResponseHandler)(int length, char* message);
+ * The callback that gets called when a message is received from Pkl.
+ *
+ * @param length    The length the message bytes
+ * @param message   The message itself
+ * @param userData  User-defined data passed in from pkl_init.
+ */
+typedef void (*PklMessageResponseHandler)(int length, char *message, void *userData);
 
 /**
-* @brief Initialises and allocates a Pkl executor.
-*
-* @return -1 on failure.
-* @return 0 on success.
-*/
-int pkl_init(PklMessageResponseHandler handler);
+ * Initialises and allocates a Pkl executor.
+ *
+ * @param handler   The callback that gets called when a message is received from Pkl.
+ * @param userData  User-defined data that gets passed to handler.
+ *
+ * @return -1 on failure, 0 on success.
+ */
+int pkl_init(PklMessageResponseHandler handler, void *userData);
 
 /**
-* @brief Send a message to Pkl, providing the length and a pointer to the first byte.
-*
-* @return -1 on failure.
-* @return 0 on success.
-*/
-int pkl_send_message(int length, char* message);
+ * Send a message to Pkl, providing the length and a pointer to the first byte.
+ *
+ * @param length    The length of the message, in bytes.
+ * @param message   The message to send to Pkl.
+ *
+ * @return -1 on failure, 0 on success.
+ */
+int pkl_send_message(int length, char *message);
 
 /**
-* @brief Cleans up any resources that were created as part of the `pkl_init` process.
-*
-* @return -1 on failure.
-* @return 0 on success.
-*/
+ * Cleans up any resources that were created as part of the `pkl_init` process.
+ *
+ * @return -1 on failure, 0 on success.
+ */
 int pkl_close();
 ----
 
