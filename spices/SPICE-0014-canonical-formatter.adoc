@@ -35,30 +35,30 @@ The standard library and https://github.com/apple/pkl-pantry[pkl-pantry] will be
 Syntactically invalid modules cannot be formatted. They will return an error when called via the CLI or the Java API.
 A syntactically invalid module is considered to have formatting issues.
 
-The formatter will not simplify code. Many of these simplifications are not possible with only parsing information
+The formatter will not simplify code. Many of these simplifications are not possible with only parsing information,
 or they may require parse time variable resolution. +
 There's also the problem that some of these simplifications are not wanted by the users. For example: during
 development, a user may add an unused import that they want to require later, but the formatter will remove it.
 
 === CLI command
 
-The CLI command will receive Pkl files as inputs and either check or format them.
+The CLI commands will receive Pkl files as inputs and either check or format them.
 
 [source,shell]
 ----
-pkl format [OPTIONS] [<modules-or-dir>]
+pkl format check <paths>
 
-  Run the formatter with the given options.
-  Inputs can be a glob of files or a directory which will be recursively searched for Pkl files.
+  Check if the given files are properly formatted, printing the file name to stdout in case they are not. Returns non-zero in case of failure.
+----
+
+[source,shell]
+----
+pkl format apply <paths>
+
+  Overwrite all the files in place with the formatted version.
 
 Options:
-  -c, --check        Check if the inputs are properly formatted, printing a diff to stdout.
-                     Returns non-zero in case of failure.
-  -l, --list         Check if the inputs are properly formatted,
-                     printing the file name to stdout in case they are not.
-                     Returns non-zero in case of failure.
-  -r, --replace      Format all the files in place.
-  -f, --format DIR   Format all the files storing the results in the given directory.
+  -s, --silent  Do not write the name of the files that failed formatting to stdout.
 ----
 
 === Java API
@@ -133,17 +133,12 @@ Code following a `=` in a new line must be indented.
 ----
 foo = new {
 bar = 1
+baz = 2
 }
 
 class Foo {
     baz: Int
 }
-
-qux =
-if (predicate)
-  1
-else
-  2
 ----
 
 .output
@@ -151,17 +146,12 @@ else
 ----
 foo = new {
   bar = 1
+  baz = 2
 }
 
 class Foo {
   baz: Int
 }
-
-qux =
-  if (predicate)
-    1
-  else
-    2
 ----
 
 ==== [0003] Spaces
@@ -234,11 +224,10 @@ The following constructs must be written in a single line, if they don't go over
 - Module, amend, and extend definition
 - Import clause
 - Class header
-- Property header
-- Function header
-- Type
+- Properties
+- Functions
+- Types
 
-Expressions must be written either in a single line or using multiple lines, but not a mix of both. +
 Parameters, type parameters, and method arguments that don't fit a single line must be indented and written
 in separate lines with a trailing comma.
 
@@ -288,8 +277,7 @@ local open class Bar {}
 
 const local baz = 10
 
-local function fun(x) =
-  x
+local function fun(x) = x
 
 local function function2(
   parameter1: Parameter1Type,
@@ -498,7 +486,12 @@ foo {
 
 ==== [0009] Modifiers
 
-Modifiers must be ordered alphabetically.
+Modifiers must be ordered in the following order:
+
+. `external`
+. `fixed`, `const`
+. `local`, `hidden`
+. `abstract`, `open`
 
 .input
 [source, pkl]
@@ -516,9 +509,9 @@ const hidden foo = 1
 local open class Foo {}
 ----
 
-==== [0010] Object and class bodies
+==== [0010] Class bodies
 
-Object and class bodies must have the opening `{` in the same line as the previous token. +
+Class bodies must have the opening `{` in the same line as the previous token. +
 A new line must follow the opening `{`. +
 The closing `}` should be in their own line. +
 An empty body should have no new lines or spaces between `{` and `}`.
@@ -526,7 +519,7 @@ An empty body should have no new lines or spaces between `{` and `}`.
 .input
 [source, pkl]
 ----
-foo = (parent) {
+class Foo {
 
 }
 
@@ -535,62 +528,27 @@ class Bar
   qux = 1
 }
 
-bar = new { prop = 0 }
+class Baz { prop = 0 }
 ----
 
 .output
 [source, pkl]
 ----
-foo = (parent) {}
+class Foo {}
 
 class Bar {
   qux = 1
 }
 
-bar = new {
+class Baz {
   prop = 0
 }
 ----
 
 ==== [0011] Object members
 
-Object members must be defined in their own line. +
-They must have one or zero empty lines separating them.
-
-.input
-[source, pkl]
-----
-foo = new Dynamic {
-  1 2
-  3 4
-
-  ["foo"] = 3; bar = 30
-
-
-  baz = true
-}
-----
-
-.output
-[source, pkl]
-----
-foo = new Dynamic {
-  1
-  2
-  3
-  4
-
-  ["foo"] = 3
-  bar = 30
-
-  baz = true
-}
-----
-
-==== [0012] Object elements
-
-Object elements must be either all defined in a single line or in separated lines. +
-Elements in the same line must be separated by a semicolon.
+Object members must be either all defined in a single line or in separated lines. +
+Members in the same line must be separated by a semicolon.
 
 .input
 [source, pkl]
@@ -603,6 +561,18 @@ bar: Listing<Int> = new { 1 2
 }
 
 lineIsTooBig: Listing<Int> = new { 999999; 1000000; 1000001; 1000002; 1000003; 1000004; 1000005; 1000006 }
+
+baz = new Dynamic {
+  1 2
+  3 4
+
+  ["foo"] = 3; bar = 30
+
+
+  baz = true
+}
+
+qux = new Dynamic {1 2 3 prop="prop"; [0]=9}
 ----
 
 .output
@@ -627,54 +597,73 @@ lineIsTooBig: Listing<Int> = new {
   1000005
   1000006
 }
+
+baz = new Dynamic {
+  1
+  2
+  3
+  4
+
+  ["foo"] = 3
+  bar = 30
+
+  baz = true
+}
+
+qux = new Dynamic { 1; 2; 3; prop="prop"; [0] = 9 }
 ----
 
-==== [0013] Expressions
+==== [0012] Expressions
 
-If an expression spans multiple lines there must be a new line after the `=`. +
-If the expression is a `new` or amending expression it should start in the same line as the `=`. +
-Operators separated by a new line must be written in the same line as the left operand.
+If the expression is a `new`, amending, or literal function expression it should start in the same line as the `=`. +
+In multiline contexts, operators must be written in the same line, except pipe (`|>`). +
+The same operators will be flattened together and only indented once.
 
 .input
 [source, pkl]
 ----
-foo = (if (true) 10 else -10) + 100 * someFuntion(1, 2, "foo")
+foo {
+  123123123123 + 123123123123 * 123123123123 - 123123123123 / 123123123123 + 123123123123 ** 123123123123
+  2
+  3
+  4
+}
 
-bar = (if (true) 10 else -10)
-  + 100 * someFuntion(1, 2, "foo")
-
-baz = 1
-  + 3
-  * 5 - 9
-
-qux =
-  new Listing {
-    1
-  }
-----
-
-.input
-[source, pkl]
-----
-foo = (if (true) 10 else -10) + 100 * someFuntion(1, 2, "foo")
-
-bar =
-  (if (true) 10 else -10) +
-    100 *
-    someFuntion(1, 2, "foo")
+bar = clazz.superclass == null || clazz.superclass.reflectee == Module || clazz.superclass.reflectee == Typed
 
 baz =
-  1 +
-    3 *
-    5 -
-    9
-
-qux = new Listing {
+new Listing {
   1
-}
+  2
+} |> mixin1 |> mixin2
 ----
 
-==== [0014] Object parameters
+.output
+[source, pkl]
+----
+foo {
+  123123123123 + 123123123123 * 123123123123 - 123123123123 / 123123123123 +
+    123123123123 ** 123123123123
+  2
+  3
+  4
+}
+
+bar =
+  clazz.superclass == null ||
+    clazz.superclass.reflectee == Module ||
+    clazz.superclass.reflectee == Typed
+
+baz = new Listing {
+  1
+  2
+}
+  |> mixin1
+  |> mixin2
+
+----
+
+==== [0013] Object parameters
 
 Object parameters must start in the same line as the opening `{`, unless it exceeds the line limit. +
 A new line must follow the `->`.
@@ -695,30 +684,31 @@ foo { a, b, c ->
 }
 ----
 
-==== [0015] If expressions
+==== [0014] If expressions
 
 An `if` that spans multiple lines must have the then and else clauses indented. +
-The `else` must be in its own line. +
+Both clauses must be in their own line. +
 If the else clause is followed by another `if`, it must not be indented and start in the same line as the `else`. +
-An `if` can be written in a single line if it fits. +
+An `if` will be written in a single line if it fits. +
 
 .input
 [source, pkl]
 ----
-foo = if (predicate) 0 else 1
-
-bar =
-  if (predicate) 0
+foo = if (predicate) 0
   else 1
 
+bar =
+  if (isItTooBigToFitInASingleLine) spanTheExpressionOverMultipleLines
+  else fitEverythingInASingleLine
+
 baz =
-  if (predicate)
-    0
+  if (somePredicate)
+    firstComputation
   else
-    if (value)
-      1
+    if (anotherPredicate)
+      secondComputation
     else
-      2
+      thirdComputation
 ----
 
 .output
@@ -727,43 +717,26 @@ baz =
 foo = if (predicate) 0 else 1
 
 bar =
-  if (predicate)
-    0
+  if (isItTooBigToFitInASingleLine)
+    spanTheExpressionOverMultipleLines
   else
-    1
+    fitEverythingInASingleLine
 
 baz =
-  if (predicate)
-    0
-  else if (value)
-    1
+  if (somePredicate)
+    firstComputation
+  else if (anotherPredicate)
+    secondComputation
   else
-    2
+    thirdComputation
 ----
 
-==== [0016] Let expressions
+==== [0015] Let expressions
 
-The expression following the let must be on its own line, and it must be indented. +
+The expression following the let must *not* be indented if it doesn't fit a single line. +
 A let followed by another let must not be indented. +
 If the binding expression spans multiple lines, the opening and closing parentheses
 must be on their own line and the whole binding must be indented.
-
-.input
-[source, pkl]
-----
-foo =
-  let (x = 1) x
-
-bar =
-  let (x = 1)
-    let (y = 2)
-      x + y
-
-baz =
-  let (value = prop1
-  .prop2.fun(1))
-    value
-----
 
 .input
 [source, pkl]
@@ -774,20 +747,42 @@ foo =
 
 bar =
   let (x = 1)
-  let (y = 2)
-    x + y
+    let (y = 2)
+      new Listing {
+        x
+        y
+      }
 
 baz =
-  let (
-    value =
-      prop1
-        .prop2
-        .fun(1)
-  )
+  let (value = new Listing {
+  1 2})
     value
 ----
 
-==== [0017] Doc comments
+.output
+[source, pkl]
+----
+foo = let (x = 1) x
+
+bar =
+  let (x = 1)
+  let (y = 2)
+  new Listing {
+    x
+    y
+  }
+
+baz =
+  let (
+    value = new Listing {
+      1
+      2
+    }
+  )
+  value
+----
+
+==== [0016] Doc comments
 
 There must be no empty line between a doc comment and its target.
 
@@ -806,7 +801,7 @@ foo = 1
 foo = 1
 ----
 
-==== [0018] Line and block comments
+==== [0017] Line and block comments
 
 Comments will be kept, as much as possible, in the same position relative to the input. +
 They will count towards the line limit. +
@@ -825,15 +820,14 @@ bar = 1 + /* block comment */
 [source, pkl]
 ----
 // line comment
-foo =
-  1 // reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long comment
+foo = 1 // reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long comment
 
 bar =
   1 + /* block comment */
     1
 ----
 
-==== [0019] Type aliases
+==== [0018] Type aliases
 
 Type aliases must be written in a single line if they fit the line limit.
 
@@ -850,10 +844,10 @@ typealias NonEmptyString =
 typealias NonEmptyString = String(!isEmpty)
 ----
 
-==== [0020] Chained methods and properties
+==== [0019] Chained methods and properties
 
-Chains of methods and properties can be written in a single line if it doesn't go over the maximum line limit. +
-Chains that don't fit a single line or that already span multiple lines must be separated into a new indented line containing the dot.
+Chains of methods and properties must be written in a single line if it doesn't go over the maximum line limit. +
+Chains that don't fit a single line must be separated into a new indented line containing the dot.
 
 .input
 [source, pkl]
@@ -861,21 +855,23 @@ Chains that don't fit a single line or that already span multiple lines must be 
 foo = bar.baz.
   qux(1)
 
-prop = bar.baz.qux(1)
+prop = someObject.propertyAccess1.propertyAccess2.methodAccess1(parameter1, parameter2).methodAccess2(1, 2, 3)
 ----
 
-.input
+.output
 [source, pkl]
 ----
-foo =
-  bar
-    .baz
-    .qux(1)
+foo = bar.baz.qux(1)
 
-prop = bar.baz.qux(1)
+prop =
+  someObject
+    .propertyAccess1
+    .propertyAccess2
+    .methodAccess1(parameter1, parameter2)
+    .methodAccess2(1, 2, 3)
 ----
 
-==== [0021] Annotations
+==== [0020] Annotations
 
 There must be no empty lines between annotations or between an annotation and its target.
 
