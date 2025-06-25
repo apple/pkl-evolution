@@ -432,15 +432,15 @@ import "..."
 
 ==== [0007] Module and class members
 
-Module and class members must be separated by exactly one empty line.
+Module and class members must be separated by, at max, one empty line.
 
 .input
 [source, pkl]
 ----
 foo = 4
-
-
 bar: String = "bar"
+
+
 class Foo {
   prop: Int; prop2: Boolean
 }
@@ -450,7 +450,6 @@ class Foo {
 [source, pkl]
 ----
 foo = 4
-
 bar: String = "bar"
 
 class Foo {
