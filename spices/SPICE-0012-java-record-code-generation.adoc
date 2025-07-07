@@ -1,0 +1,482 @@
+= SPICE Name
+
+* Proposal: link:./SPICE-0012-java-record-code-generation.adoc[SPICE-0012]
+* Author: link:https://github.com/protobufel2[David Tesler]
+* Status: Accepted
+* Implemented in: Pkl 0.29
+* Category: Tooling
+
+== Introduction
+
+Provide Java code generation based on Java Records with optional JEP 468 like Withers or Lombok Builders.
+
+== Motivation
+
+Pkl Java code generation is intended for providing an immutable Java object model of the source Pkl module(-s).
+At present, Pkl generates the immutable classes, not Java records, along with single property withers like `with<PropName>(value)`.
+Java records would be a better, the ideal choice for such implementation, being concise, properly serializable, and future-proof.
+
+However, as many things in Java, Records is a work in progress. Currently, it doesn't have so-called `withers`,
+proposed in https://openjdk.org/jeps/468[JEP 468], but yet to be delivered.
+
+In addition, Java records are final and can be "extended" only via implementing Java interfaces, which presents
+certain challenges for representing Pkl `open` and `abstract` classes.
+
+== Proposed Solution
+
+In short, Pkl regular (final) classes would be turned into Java records, +
+Pkl `abstract` classes into Java interfaces, +
+and Pkl `open` classes into Java records along with the corresponding Java interfaces.
+
+Given that Pkl classes are non-generic, only Pkl Standard Library classes might be generic, and cannot extend such classes, +
+the Java Records generation is practically generics free.
+
+This solution just replaces the Java classes with records and interfaces, leaving the rest of the current Java code generation implementation intact.
+
+Provide the following optional features:
+
+* enable JEP 468 like withers for records via `--use-withers` in CLI or `useWithers` in Pkl Gradle Plugin, `false` by default +
+
+Given the generated record:
+
+[source,java]
+----
+package example;
+
+import example.R.Memento;
+import java.io.Serializable;
+import java.util.function.Consumer;
+import org.pkl.codegen.java.common.code.Wither;
+
+record R(String p1, String p2, String p3) implements Wither<R, Memento>, Serializable {
+
+  @Override
+  public R with(final Consumer<Memento> setter) {
+    final var stub = new Memento(this);
+    setter.accept(stub);
+    return stub.build();
+  }
+
+  public static class Memento {
+
+    public String p1;
+    public String p2;
+    public String p3;
+
+    private Memento(final R r) {
+      p1 = r.p1;
+      p2 = r.p2;
+      p3 = r.p3;
+    }
+
+    private R build() {
+      return new R(p1, p2, p3);
+    }
+  }
+}
+----
+
+Usage:
+
+[source,java]
+----
+    final R r1 = new R("a", "b", "c");
+    final R r2 = r1.with(it -> it.p1 = "a2").with(it -> {
+      it.p2 = "b2";
+      it.p3 = "c2";
+    });
+----
+
+Note that the above `it` is properly typed allowing for Java syntax verification and IDE code completion.
+
+* enable Lombok Builder(-s) for records via `--use-lombok-builders` in CLI or `useLombokBuilders` in Pkl Gradle Plugin, `false` by default
+
+Given the generated record:
+
+[source,java]
+----
+package example;
+
+import lombok.Builder;
+
+...
+
+@Builder
+record A1(String s1, B1 b1) {}
+
+@Builder
+record B1(int i1, Map<String, String> map1) {}
+----
+
+Usage:
+
+[source,java]
+----
+final var a1 = A1.builder().b1(B1.builder().i1(1).build()).build();
+----
+
+Both the Lombok Builders and the Withers, are just short gaps until the official Java solution whatever it might be.
+However, the Withers is as close as possible to JEP 468, easy to use, performant, and easily refactorable into any final form when it arrives.
+Given that the generated object models might be quite large and sophisticated, depending on the Pkl source, and used extensively in the embedding codebase,
+the ease of refactoring here is a major factor, so the Withers arguably is a much better choice and practically future-proof.
+
+== Detailed design
+
+=== Pkl Java Records Generation
+
+Modify the existing Pkl Java Classes Generation by replacing all Java classes with the one-property withers with the corresponding Java records and their Java interfaces as described below.
+
+. Given a list of source Pkl modules, do the following for each:
+.. for a Pkl `abstract` class, including a Pkl module, generate the corresponding Java interface:
+... if the Pkl class is `module` name the Java interface as Pkl, else prepend the Pkl name with `I`
+... each Pkl declared public property becomes the Java interface's abstract method of the same `type` and `name`
+... if the Pkl `abstract` class has a superclass, the Java interface should extend the Java interface of the superclass (turned into a Java interface itself), if present
+.. for a non-abstract Pkl class, including a Pkl module, generate the corresponding Java record of the same name:
+... each Pkl declared public property becomes the Java record's component (similar to the current Java code generation)
+... if the Pkl class has a superclass, the Java record should implement the corresponding Java interface of the Pkl superclass
+... if `Withers` enabled:
+.... the Java record should in addition implement the common generic `Wither` interface, see below
+.... the Java record should have its special `Memento` public static inner class generated as described below
+... if `Lombok Builder` enabled, the Java record should be annotated with `lombok.Builder`, see below
+.. for a Pkl `open` class:
+... generate its Java interface as in the `abstract` Pkl case, only always name it with `I` prepended
+... generate its Java record as in the non-abstract Pkl case
+... the generated Java record should, in addition, implement the above generated Java interface
+. All annotations, comments, and such should be applied to the generated Java records according to Java conventions with one caveat.
+The Java record parameters' Javadoc comments should be all merged into the record's common Javadoc comment.
+
+Example:
+
+Given the Pkl code:
+
+[source,pkl]
+----
+/// module comment.
+/// *emphasized* `code`.
+module my.mod
+
+/// module property comment.
+/// *emphasized* `code`.
+pigeon: Person
+
+/// class comment.
+/// *emphasized* `code`.
+class Person {
+/// class property comment.
+/// *emphasized* `code`.
+name: String
+}
+----
+
+Generate:
+
+[source,java]
+----
+package my;
+
+import java.lang.String;
+import org.pkl.config.java.mapper.Named;
+import org.pkl.config.java.mapper.NonNull;
+
+/**
+* module comment.
+* *emphasized* `code`.
+*
+* @param pigeon module property comment.
+* *emphasized* `code`.
+*/
+public record Mod(@Named("pigeon") Mod. @NonNull Person pigeon) {
+/**
+* class comment.
+* *emphasized* `code`.
+*
+* @param name class property comment.
+* *emphasized* `code`.
+*/
+public record Person(@Named("name") @NonNull String name) {
+}
+}
+----
+
+=== Withers generation
+
+If `Withers` enabled via `--use-withers` CLI or `useWithers` in Pkl Gradle Plugin, augment the Java Records Generation as follows.
+
+. Generate one and only one common Wither interface class `org.pkl.codegen.java.common.code.Wither` in the corresponding package according to regular Java conventions:
+.. If `nonNullAnnotation` option is empty/null, generate the following:
+
+[source,java]
+----
+package org.pkl.codegen.java.common.code;
+
+import java.lang.Record;
+import java.util.function.Consumer;
+import org.pkl.config.java.mapper.NonNull;
+
+public interface Wither<@NonNull R extends @NonNull Record, @NonNull S> {
+@NonNull R with(@NonNull Consumer<@NonNull S> setter);
+}
+----
+
+.. If `nonNullAnnotation` option is set, for example to `"very.custom.HelloNull"`, then generate the following:
+
+[source,java]
+----
+package org.pkl.codegen.java.common.code;
+
+import java.lang.Record;
+import java.util.function.Consumer;
+import very.custom.HelloNull;
+
+public interface Wither<@HelloNull R extends @HelloNull Record, @HelloNull S> {
+@HelloNull R with(@HelloNull Consumer<@HelloNull S> setter);
+}
+----
+
+. All generated Java records should implement the above common Wither interface along with the complimentary Memento pattern
+
+Example:
+
+Given the Pkl code:
+
+[source,pkl]
+----
+module my.mod
+
+abstract class Foo {
+one: Int
+}
+open class None extends Foo {}
+open class Bar extends None {
+two: String?
+}
+class Baz extends Bar {
+three: Duration
+}
+----
+
+Generate:
+
+[source,java]
+----
+package my;
+
+import java.lang.Override;
+import java.lang.String;
+import java.util.function.Consumer;
+import org.pkl.codegen.java.common.code.Wither;
+import org.pkl.config.java.mapper.Named;
+import org.pkl.config.java.mapper.NonNull;
+import org.pkl.core.Duration;
+
+public record Mod() {
+  public interface Foo {
+    long one();
+  }
+
+  public interface INone extends Foo {
+  }
+
+  public record None(@Named("one") long one) implements Foo, INone, Wither<None, None.Memento> {
+    @Override
+    public @NonNull None with(final @NonNull Consumer<Memento> setter) {
+      final var memento = new Memento(this);
+      setter.accept(memento);
+      return memento.build();
+    }
+
+    public static final class Memento {
+      public long one;
+
+      private Memento(final @NonNull None r) {
+        one = r.one;
+      }
+
+      private @NonNull None build() {
+        return new None(one);
+      }
+    }
+  }
+
+  public interface IBar extends INone {
+    String two();
+  }
+
+  public record Bar(@Named("one") long one,
+      @Named("two") String two) implements INone, IBar, Wither<Bar, Bar.Memento> {
+    @Override
+    public @NonNull Bar with(final @NonNull Consumer<Memento> setter) {
+      final var memento = new Memento(this);
+      setter.accept(memento);
+      return memento.build();
+    }
+
+    public static final class Memento {
+      public long one;
+
+      public String two;
+
+      private Memento(final @NonNull Bar r) {
+        one = r.one;
+        two = r.two;
+      }
+
+      private @NonNull Bar build() {
+        return new Bar(one, two);
+      }
+    }
+  }
+
+  public record Baz(@Named("one") long one, @Named("two") String two,
+      @Named("three") @NonNull Duration three) implements IBar, Wither<Baz, Baz.Memento> {
+    @Override
+    public @NonNull Baz with(final @NonNull Consumer<Memento> setter) {
+      final var memento = new Memento(this);
+      setter.accept(memento);
+      return memento.build();
+    }
+
+    public static final class Memento {
+      public long one;
+
+      public String two;
+
+      public @NonNull Duration three;
+
+      private Memento(final @NonNull Baz r) {
+        one = r.one;
+        two = r.two;
+        three = r.three;
+      }
+
+      private @NonNull Baz build() {
+        return new Baz(one, two, three);
+      }
+    }
+  }
+}
+----
+
+=== Spring Boot annotation generation
+
+Spring Boot Properties Binding works fine with Java records. +
+Attach Spring Boot `@ConfigurationProperties` annotation as per Java rules, for example:
+
+Given the Pkl code:
+
+[source,pkl]
+----
+module my.mod
+
+server: Server
+
+class Server {
+port: Int
+urls: Listing<Uri>
+}
+----
+
+Generate:
+
+[source,java]
+----
+package my;
+
+import java.net.URI;
+import java.util.List;
+import org.pkl.config.java.mapper.NonNull;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties
+public record Mod(Mod. @NonNull Server server) {
+  @ConfigurationProperties("server")
+  public record Server(long port, @NonNull List<@NonNull URI> urls) {
+  }
+}
+----
+
+== Compatibility
+
+The solution to be implemented side-by-side with the existing Java Code Generation, in the separate production and test files.
+In addition, 3 new feature toggles being introduced:
+
+. Generate Java Records:
+** `--generate-records` in CLI
+** `generateRecords` in Pkl Gradle Plugin
+
+----
+Whether to generate Java records and the related interfaces.
+This overrides any Java class generation related options!
+----
+
+. Generate Java Records:
+** `--use-withers` in CLI
+** `useWithers` in Pkl Gradle Plugin
+
+----
+Whether to generate JEP 468 like withers for records.
+----
+
+. Generate Java Records:
+** `--use-lombok-builders` in CLI
+** `useLombokBuilders` in Pkl Gradle Plugin
+
+----
+Whether to generate Lombok Builders for records.
+----
+
+Given the above opt-in nature of the design, it is fully compatible with the existing offering,
+while allowing for easy deprecation and removal of the current Java Code Generation.
+
+== Future directions
+
+. In the future, we might want to replace the current Java nullability annotations, assuming JSR-305 as default and applied to every generated artifact,
+with the becoming de-facto https://jspecify.dev[JSpecify] as more and more prominent Java projects along with Kotlin adopting it as of this writing.
+
+With `JSpecify` we would be able to adopt its nonnull by default style with `@NullMarked`, removing much of the noise in the generated code,
+assuming that most of the Pkl source properties are nonnull. This is a flip of the current implementation.
+
+. Some limited extensibility API might be provided as follows:
+.. expose the specific empty base Java interfaces to be replaced by users with the following choices:
+... one base interface implemented by all generated records, for example:
+
+[source,java]
+----
+...
+record R(/* component list of <Type name> */) implements ... IPklBase {
+...
+----
+
+... one base interface per a Java record type, for example:
+
+[source,java]
+----
+record R(...) implements ... IRBase {
+
+----
+
+If the records generation successful, the current Java (non-record, plain Java classes) Code Generation might be deprecated and completely removed with minimal impact to the codebase.
+In addition, the newly introduced optional features, `useWithers` and `useLombokBuilders`, along with their self-contained code,
+can also be easily deprecated/replaced/removed upon the official Java withers arrival, whatever it might be.
+
+== Alternatives considered
+
+The other alternative is to use a combination of the Java records for the Pkl regular classes and the abstract Java classes for the rest,
+requiring dealing with the Java class inheritance and related issues, complicating the matters.
+
+On the other hand, the current implementation doesn't provide any extra user features comparing to the proposed solution,
+while having a number of drawbacks like:
+* requires `hashCode/equals` implementation for each artifact
+* weak, insecure serialization
+* inconsistent and verbose properties realization either as getters or fields, each with its own annotation and comments rules
+* related inheritance issues
+
+The proposed pure Java records based solution is fully future-proof, performant, properly serializable (as Java advances),
+and doesn't have inheritance related issues being pure interfaces driven.
+
+== Acknowledgements
+
+Kudos to the Pkl Maintainers for their helpful insights, guidance, and patience, including
+* https://github.com/bioball[Dan Chao]
+* https://github.com/stackoverflow[Islon Scherer]
+and https://github.com/arouel[André Rouél] for the code review.
