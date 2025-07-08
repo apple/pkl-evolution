@@ -430,15 +430,19 @@ while allowing for easy deprecation and removal of the current Java Code Generat
 
 == Future directions
 
-. In the future, we might want to replace the current Java nullability annotations, assuming JSR-305 as default and applied to every generated artifact,
+=== Nullability:
+
+In the future, we might want to replace the current Java nullability annotations, assuming JSR-305 as default and applied to every generated artifact,
 with the becoming de-facto https://jspecify.dev[JSpecify] as more and more prominent Java projects along with Kotlin adopting it as of this writing.
 
 With `JSpecify` we would be able to adopt its nonnull by default style with `@NullMarked`, removing much of the noise in the generated code,
 assuming that most of the Pkl source properties are nonnull. This is a flip of the current implementation.
 
-. Some limited extensibility API might be provided as follows:
-.. expose the specific empty base Java interfaces to be replaced by users with the following choices:
-... one base interface implemented by all generated records, for example:
+=== Some limited extensibility API might be provided as follows:
+
+Expose the specific empty base Java interfaces to be replaced by users with the following choices:
+
+* one base interface implemented by all generated records, for example:
 
 [source,java]
 ----
@@ -447,7 +451,7 @@ record R(/* component list of <Type name> */) implements ... IPklBase {
 ...
 ----
 
-... one base interface per a Java record type, for example:
+* one base interface per a Java record type, for example:
 
 [source,java]
 ----
@@ -455,7 +459,10 @@ record R(...) implements ... IRBase {
 
 ----
 
-If the records generation successful, the current Java (non-record, plain Java classes) Code Generation might be deprecated and completely removed with minimal impact to the codebase.
+=== Java Classes Code Generation deprecation and removal
+
+If the records generation proves successful, the current Java (non-record, plain Java classes) Code Generation might be deprecated and completely removed with minimal impact to the codebase.
+
 In addition, the newly introduced optional features, `useWithers` and `useLombokBuilders`, along with their self-contained code,
 can also be easily deprecated/replaced/removed upon the official Java withers arrival, whatever it might be.
 
@@ -466,6 +473,7 @@ requiring dealing with the Java class inheritance and related issues, complicati
 
 On the other hand, the current implementation doesn't provide any extra user features comparing to the proposed solution,
 while having a number of drawbacks like:
+
 * requires `hashCode/equals` implementation for each artifact
 * weak, insecure serialization
 * inconsistent and verbose properties realization either as getters or fields, each with its own annotation and comments rules
@@ -477,6 +485,8 @@ and doesn't have inheritance related issues being pure interfaces driven.
 == Acknowledgements
 
 Kudos to the Pkl Maintainers for their helpful insights, guidance, and patience, including
+
 * https://github.com/bioball[Dan Chao]
 * https://github.com/stackoverflow[Islon Scherer]
+
 and https://github.com/arouel[André Rouél] for the code review.
