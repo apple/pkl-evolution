@@ -269,6 +269,7 @@ prop2: String
 [source, pkl]
 ----
 module foo.bar.baz
+
 amends "bar.pkl"
 
 import "@foo/Foo.pkl" as foo
@@ -329,6 +330,7 @@ module
   reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly
     .loooooooooooooooooooooooooooooooog
     .naaaaaaaaaaaaaaaaaaaaaaaaaame
+
 extends
   "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
 
@@ -379,13 +381,12 @@ bar:
 
 ==== [0005] Module definitions
 
-There must be no empty lines between a module and an amend/extend definition.
+There must be one empty line between a module and an amend/extend definition.
 
 .input
 [source, pkl]
 ----
 module foo.bar.baz
-
 amends "bar.pkl"
 ----
 
@@ -393,6 +394,7 @@ amends "bar.pkl"
 [source, pkl]
 ----
 module foo.bar.baz
+
 amends "bar.pkl"
 ----
 
