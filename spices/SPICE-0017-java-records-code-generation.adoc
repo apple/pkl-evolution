@@ -1,6 +1,6 @@
 = SPICE Name
 
-* Proposal: link:./SPICE-0012-java-record-code-generation.adoc[SPICE-0012]
+* Proposal: link:./SPICE-0017-java-records-code-generation.adoc[SPICE-0012]
 * Author: link:https://github.com/protobufel2[David Tesler]
 * Status: Accepted
 * Implemented in: Pkl 0.29
