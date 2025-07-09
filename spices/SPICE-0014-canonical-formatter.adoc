@@ -381,7 +381,7 @@ bar:
 
 ==== [0005] Module definitions
 
-There must be one empty line between a module and an amend/extend definition.
+There must be one empty line between a module and an amends/extends definition.
 
 .input
 [source, pkl]
@@ -734,7 +734,7 @@ baz =
 
 ==== [0015] Let expressions
 
-The expression following the let must *not* be indented if it doesn't fit a single line. +
+The expression following the let must be indented if it doesn't fit a single line. +
 A let followed by another let must not be indented. +
 If the binding expression spans multiple lines, the opening and closing parentheses
 must be on their own line and the whole binding must be indented.
@@ -768,10 +768,10 @@ foo = let (x = 1) x
 bar =
   let (x = 1)
   let (y = 2)
-  new Listing {
-    x
-    y
-  }
+    new Listing {
+      x
+      y
+    }
 
 baz =
   let (
@@ -780,7 +780,7 @@ baz =
       2
     }
   )
-  value
+    value
 ----
 
 ==== [0016] Doc comments
