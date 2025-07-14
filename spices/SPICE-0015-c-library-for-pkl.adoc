@@ -32,7 +32,7 @@ Pkl already has a https://pkl-lang.org/main/current/bindings-specification/messa
 .native_pkl_interface.c
 [source,c]
 ----
-*
+/**
  * The callback that gets called when a message is received from Pkl.
  *
  * @param length    The length the message bytes
