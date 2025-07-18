@@ -231,6 +231,9 @@ The following constructs must be written in a single line, if they don't go over
 Parameters, type parameters, and method arguments that don't fit a single line must be indented and written
 in separate lines with a trailing comma.
 
+Function headers (everything before the type or normal parameters begin) must not break lines. +
+Property and typealiases headers must not break lines.
+
 .input
 [source, pkl]
 ----
@@ -400,7 +403,7 @@ amends "bar.pkl"
 
 ==== [0006] Imports
 
-Imports must be sorted alphabetically. +
+Imports must be sorted by their natural order. +
 They must be grouped in 3 groups, in this order: absolute imports, project imports, and relative imports. +
 Each group must be separated by an empty line. +
 Imports in the same group must not be separated by an empty line.
@@ -489,25 +492,25 @@ foo {
 
 Modifiers must be ordered in the following order:
 
-. `external`
-. `fixed`, `const`
-. `local`, `hidden`
 . `abstract`, `open`
+. `external`
+. `local`, `hidden`
+. `fixed`, `const`
 
 .input
-[source, pkl]
-----
-hidden const foo = 1
-
-open local class Foo {}
-----
-
-.output
 [source, pkl]
 ----
 const hidden foo = 1
 
 local open class Foo {}
+----
+
+.output
+[source, pkl]
+----
+hidden const foo = 1
+
+open local class Foo {}
 ----
 
 ==== [0010] Class bodies
@@ -617,7 +620,7 @@ qux = new Dynamic { 1; 2; 3; prop="prop"; [0] = 9 }
 ==== [0012] Expressions
 
 If the expression is a `new`, amending, or literal function expression it should start in the same line as the `=`. +
-In multiline contexts, operators must be written in the same line, except pipe (`|>`). +
+In multiline contexts, operators must be written in the next line, except minus (`-`). +
 The same operators will be flattened together and only indented once.
 
 .input
@@ -643,24 +646,25 @@ new Listing {
 [source, pkl]
 ----
 foo {
-  123123123123 + 123123123123 * 123123123123 - 123123123123 / 123123123123 +
-    123123123123 ** 123123123123
+  123123123123 + 123123123123 * 123123123123 - 123123123123 / 123123123123
+    + 123123123123 ** 123123123123
   2
   3
   4
 }
 
 bar =
-  clazz.superclass == null ||
-    clazz.superclass.reflectee == Module ||
-    clazz.superclass.reflectee == Typed
+  clazz.superclass == null
+    || clazz.superclass.reflectee == Module
+    || clazz.superclass.reflectee == Typed
 
-baz = new Listing {
-  1
-  2
-}
-  |> mixin1
-  |> mixin2
+baz =
+  new Listing {
+    1
+    2
+  }
+    |> mixin1
+    |> mixin2
 
 ----
 
@@ -785,7 +789,10 @@ baz =
 
 ==== [0016] Doc comments
 
-There must be no empty line between a doc comment and its target.
+There must be no empty line between a doc comment and its target. +
+There must be no spurious `/` at the beginning of a doc comment. +
+There must be a space after the `///`. +
+Doc comments must not contain blank lines.
 
 .input
 [source, pkl]
@@ -793,6 +800,17 @@ There must be no empty line between a doc comment and its target.
 /// A foo
 
 foo = 1
+
+///// comment
+bar = 1
+
+///comment
+baz = 1
+
+/// the line bellow cannot have trailling whitespaces
+///
+/// line2
+qux = 1
 ----
 
 .output
@@ -800,6 +818,18 @@ foo = 1
 ----
 /// A foo
 foo = 1
+
+/// comment
+bar = 1
+
+/// comment
+baz = 1
+
+/// the line bellow cannot have trailling whitespaces
+///
+/// line2
+qux = 1
+
 ----
 
 ==== [0017] Line and block comments
@@ -830,7 +860,8 @@ bar =
 
 ==== [0018] Type aliases
 
-Type aliases must be written in a single line if they fit the line limit.
+Type aliases must be written in a single line if they fit the line limit. +
+There should be no line break between the `typealias` keyword and the typealias name.
 
 .input
 [source, pkl]
@@ -848,7 +879,8 @@ typealias NonEmptyString = String(!isEmpty)
 ==== [0019] Chained methods and properties
 
 Chains of methods and properties must be written in a single line if it doesn't go over the maximum line limit. +
-Chains that don't fit a single line must be separated into a new indented line containing the dot.
+Chains that don't fit a single line must be separated into a new indented line containing the dot. +
+Chains of 2 or more methods where at least one contains a function literal must break lines.
 
 .input
 [source, pkl]
@@ -857,6 +889,9 @@ foo = bar.baz.
   qux(1)
 
 prop = someObject.propertyAccess1.propertyAccess2.methodAccess1(parameter1, parameter2).methodAccess2(1, 2, 3)
+
+// break lines even though it fits
+res = list.map((it) -> it.partition).filter((it) -> it.predicate)
 ----
 
 .output
@@ -870,6 +905,13 @@ prop =
     .propertyAccess2
     .methodAccess1(parameter1, parameter2)
     .methodAccess2(1, 2, 3)
+
+// break lines even though it fits
+res =
+  list
+    .map((it) -> it.partition)
+    .filter((it) -> it.predicate)
+
 ----
 
 ==== [0020] Annotations
@@ -896,6 +938,37 @@ bar = true
   foo = 1
 }
 bar = true
+----
+
+==== [0021] Multiline strings
+
+Multiline strings must have the opening and closing `"""` aligned in a new line according to the current indentation. +
+Indented white space that matches the indentation must be removed.
+
+.input
+[source, pkl]
+----
+// `.` is used here to represent white space
+foo = """
+....foo
+....
+......
+....bar
+...."""
+----
+
+.output
+[source, pkl]
+----
+// `.` is used here to represent white space
+foo =
+  """
+..foo
+
+....
+..bar
+.."""
+
 ----
 
 == Compatibility
