@@ -1,0 +1,999 @@
+= Canonical formatter
+
+* Proposal: link:./SPICE-0014-canonical-formatter.adoc[SPICE-0014]
+* Author: https://github.com/stackoverflow[Islon Scherer]
+* Status: TBD
+* Implemented in: TBD
+* Category: Tooling
+
+== Introduction
+
+This SPICE proposes a canonical formatter for Pkl, including a CLI command `pkl format`.
+
+== Motivation
+
+Pkl doesn't have any code formatting tooling at the moment. There's a https://pkl-lang.org/main/current/style-guide/index.html[style guide]
+and an ad-hoc formatter in the IntelliJ plugin, but that is only available in IntelliJ, has some quirks and bugs,
+and doesn't follow our style guide.
+
+A canonical formatter shipped with the language will allow users to format their Pkl code in an editor-independent way.
+It will also facilitate diffing Pkl code as formatting rules can be equalized.
+
+== Proposed Solution
+
+A new CLI command: `pkl format` will be introduced to the language to format Pkl files.
+A Java API will also be provided.
+
+== Detailed design
+
+The formatter won't allow any form of customization, similarly to https://pkg.go.dev/cmd/gofmt[gofmt].
+The idea is that there is a single canonical set of rules to format Pkl code. If people want to format their Pkl
+code differently, they can use other tools that allow customization.
+
+The standard library and https://github.com/apple/pkl-pantry[pkl-pantry] will be formatted using `pkl format`.
+
+Syntactically invalid modules cannot be formatted. They will return an error when called via the CLI or the Java API.
+A syntactically invalid module is considered to have formatting issues.
+
+The formatter will not simplify code. Many of these simplifications are not possible with only parsing information,
+or they may require parse time variable resolution. +
+There's also the problem that some of these simplifications are not wanted by the users. For example: during
+development, a user may add an unused import that they want to require later, but the formatter will remove it.
+
+=== CLI command
+
+The CLI commands will receive Pkl files as inputs and either check or format them.
+
+[source,shell]
+----
+pkl format check <paths>
+
+  Check if the given files are properly formatted, printing the file name to stdout in case they are not. Returns non-zero in case of failure.
+----
+
+[source,shell]
+----
+pkl format apply <paths>
+
+  Overwrite all the files in place with the formatted version.
+
+Options:
+  -s, --silent  Do not write the name of the files that failed formatting to stdout.
+----
+
+=== Java API
+
+The Java API will provide a way to use the formatter programmatically from any JVM language.
+
+[source, java]
+----
+public class PklFormatter {
+  // Check the given file for formatting violations and return
+  // a possible diff of said violations
+  public @Nullable String check(Path path) {}
+  public @Nullable String check(String code) {}
+
+  // Returns a formatted version of the given file
+  public String format(Path path) {}
+  public String format(String code) {}
+}
+----
+
+=== Rules
+
+The formatter will follow a set of rules. These rules are set in stone and cannot be configured.
+It's important to agree on these rules now, because changing them later would cause a big incompatibility problem
+for users, where their whole codebase would be formatted different due to a rule change.
+
+Some of these rules were taken from our https://pkl-lang.org/main/current/style-guide/index.html[style guide] verbatim,
+others had to be made more strict.
+
+Rules are presented here in order of generic to specific.
+Generic rules (bigger numbers) overrule previously defined ones, if they conflict.
+
+==== [0001] Line Width
+
+Lines must be a maximum of 100 characters long. Exceptions are string literals, identifiers, and doc comments.
+
+.input
+[source, pkl]
+----
+/// this property has a reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long doc comment
+property = if (reallyLongVariableName) anotherReallyLongName else evenLongerVariableName + anotherReallyLongName
+
+longString = "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long string"
+
+reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongVariableName = 10
+----
+
+.output
+[source, pkl]
+----
+/// this property has a reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long doc comment
+property =
+  if (reallyLongVariableName)
+    anotherReallyLongName
+  else
+    evenLongerVariableName + anotherReallyLongName
+
+longString =
+  "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long string"
+
+reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongVariableName
+  = 10
+----
+
+==== [0002] Indentation
+
+Code must be indented with two spaces. +
+Code following a `=` in a new line must be indented.
+
+.input
+[source, pkl]
+----
+foo = new {
+bar = 1
+baz = 2
+}
+
+class Foo {
+    baz: Int
+}
+----
+
+.output
+[source, pkl]
+----
+foo = new {
+  bar = 1
+  baz = 2
+}
+
+class Foo {
+  baz: Int
+}
+----
+
+==== [0003] Spaces
+
+A space must be added
+
+- After keywords, except function/property-like keywords (`trace`, `throw`, `module`, `this`, `super`, `outer`, `read`,
+`read?`, `read*`)
+- Before and after braces
+- Before and after an equals sign
+- Before and after an arrow (`->`)
+- Before a line or block comment start (`//`, `/*`)
+- Before a block comment end (`*/`)
+- Around infix operators
+- After a comma
+- After a colon
+- After a semicolon
+- After a line, block, or doc comment start (`//`, `///`, `/*`)
+- Before the opening parentheses in control operators like `if`, `for`, `when`
+
+There must be no empty spaces
+
+- Before a comma
+- Before a colon
+- Before a subscript (`[]`)
+- Before a `?` in a nullable type
+- Before and after a pipe
+- After a function name
+- After a `*` in a default type
+- Between a type and its constraints and type parameters
+- After the opening and before the closing of: parentheses (`()`), square brackets (`[]`), and angle brackets (`<>`)
+- At the end of a line
+
+.input
+[source, pkl]
+----
+import"foo.pkl"
+
+bar=new  Listing < Int > ( !isEmpty ){1}//a bar
+
+///a baz
+///returns its parameter
+baz = (x)->x
+
+function fun ( x:Int ? ,b  :Boolean )= if(b)/*return x*/x else x+bar [0 ]
+
+choices: "foo" | * "bar" | String
+----
+
+.output
+[source, pkl]
+----
+import "foo.pkl"
+
+bar = new Listing<Int>(!isEmpty) { 1 } // a bar
+
+/// a baz
+/// returns its parameter
+baz = (x) -> x
+
+function fun(x: Int?, b: Boolean) = if (b) /* return x */ x else x + bar[0]
+
+choices: "foo"|*"bar"|String
+----
+
+==== [0004] Line breaks
+
+The following constructs must be written in a single line, if they don't go over the maximum line limit.
+
+- Module, amend, and extend definition
+- Import clause
+- Class header
+- Properties
+- Functions
+- Types
+
+Parameters, type parameters, and method arguments that don't fit a single line must be indented and written
+in separate lines with a trailing comma.
+
+Function headers (everything before the type or normal parameters begin) must not break lines. +
+Property and typealiases headers must not break lines.
+
+.input
+[source, pkl]
+----
+module
+ foo.bar.baz
+amends
+ "bar.pkl"
+
+import
+ "@foo/Foo.pkl"
+  as foo
+
+local
+open
+class Bar {}
+
+const
+local
+baz = 10
+
+local
+function
+fun(x) =
+  x
+
+local function function2(parameter1: Parameter1Type, parameter2: Parameter2Type, parameter3: Parameter3Type, parameter4: Parameter4Type): String = ""
+
+prop = function2(loooooooooooooooooogParameter1, loooooooooooooooooogParameter2, loooooooooooooooooogParameter3, loooooooooooooooooogParameter4)
+
+prop2: String
+  |Int
+  |Boolean
+----
+
+.output
+[source, pkl]
+----
+module foo.bar.baz
+
+amends "bar.pkl"
+
+import "@foo/Foo.pkl" as foo
+
+local open class Bar {}
+
+const local baz = 10
+
+local function fun(x) = x
+
+local function function2(
+  parameter1: Parameter1Type,
+  parameter2: Parameter2Type,
+  parameter3: Parameter3Type,
+  parameter4: Parameter4Type
+): String = ""
+
+prop =
+  function2(
+    loooooooooooooooooogParameter1,
+    loooooooooooooooooogParameter2,
+    loooooooooooooooooogParameter3,
+    loooooooooooooooooogParameter4
+  )
+
+prop2: String|Int|Boolean
+----
+
+.lineBreakInput
+[source, pkl]
+----
+module reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly.loooooooooooooooooooooooooooooooog.naaaaaaaaaaaaaaaaaaaaaaaaaame
+extends "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
+
+import "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl" as foo
+
+local open class LoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooongName {}
+
+local open class ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongName {}
+
+const hidden loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName = 99
+
+const hidden reallyLoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName = 99
+
+const local function looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(x: Int, y) = x + y
+
+const local function reallyLooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(x: Int, y) = x + y
+
+typealias Foo = LooooooooooooooooooooooooongTypeName|AnotherLooooooooooooooooooooooooongTypeName|OtherLooooooooooooooooooooooooongTypeName
+
+bar: Boolean|Mapping<LooooooooooooooooooooooooongTypeName, AnotherLooooooooooooooooooooooooongTypeName>(loooooooooooooooooooogConstraint)
+----
+
+.lineBreakOutput
+[source, pkl]
+----
+module
+  reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly
+    .loooooooooooooooooooooooooooooooog
+    .naaaaaaaaaaaaaaaaaaaaaaaaaame
+
+extends
+  "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
+
+import
+  "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
+  as foo
+
+local open
+class LoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooongName {}
+
+local open
+class
+  ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongName
+  {}
+
+const hidden
+loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName = 99
+
+const hidden
+reallyLoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName
+  = 99
+
+const local
+function looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
+  x: Int,
+  y
+) = x + y
+
+const local
+function
+  reallyLooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
+  x: Int,
+  y
+) = x + y
+
+typealias Foo =
+  LooooooooooooooooooooooooongTypeName
+  |AnotherLooooooooooooooooooooooooongTypeName
+  |OtherLooooooooooooooooooooooooongTypeName
+
+bar:
+  Boolean
+  |Mapping<
+    LooooooooooooooooooooooooongTypeName,
+    AnotherLooooooooooooooooooooooooongTypeName
+  >(loooooooooooooooooooogConstraint)
+----
+
+==== [0005] Module definitions
+
+There must be one empty line between a module and an amends/extends definition.
+
+.input
+[source, pkl]
+----
+module foo.bar.baz
+amends "bar.pkl"
+----
+
+.output
+[source, pkl]
+----
+module foo.bar.baz
+
+amends "bar.pkl"
+----
+
+==== [0006] Imports
+
+Imports must be sorted by their natural order. +
+They must be grouped in 3 groups, in this order: absolute imports, project imports, and relative imports. +
+Each group must be separated by an empty line. +
+Imports in the same group must not be separated by an empty line.
+
+.input
+[source, pkl]
+----
+import "@foo/Foo.pkl" as foo
+import* "**.pkl"
+
+import "package://example.com/myPackage@1.0.0#/Qux.pkl"
+
+
+import "https://example.com/baz.pkl"
+import "..."
+import "@bar/Bar.pkl"
+----
+
+.output
+[source, pkl]
+----
+import "https://example.com/baz.pkl"
+import "package://example.com/myPackage@1.0.0#/Qux.pkl"
+
+import "@bar/Bar.pkl"
+import "@foo/Foo.pkl" as foo
+
+import* "**.pkl"
+import "..."
+----
+
+==== [0007] Module and class members
+
+Module and class members must be separated by, at max, one empty line.
+
+.input
+[source, pkl]
+----
+foo = 4
+bar: String = "bar"
+
+
+class Foo {
+  prop: Int; prop2: Boolean
+}
+----
+
+.output
+[source, pkl]
+----
+foo = 4
+bar: String = "bar"
+
+class Foo {
+  prop: Int
+
+  prop2: Boolean
+}
+----
+
+==== [0008] Members within braces
+
+Members within braces must be indented one level deeper than their parents.
+
+.input
+[source, pkl]
+----
+foo {
+bar {
+    baz = "hi"
+}
+}
+----
+
+.output
+[source, pkl]
+----
+foo {
+  bar {
+    baz = "hi"
+  }
+}
+----
+
+==== [0009] Modifiers
+
+Modifiers must be ordered in the following order:
+
+. `abstract`, `open`
+. `external`
+. `local`, `hidden`
+. `fixed`, `const`
+
+.input
+[source, pkl]
+----
+const hidden foo = 1
+
+local open class Foo {}
+----
+
+.output
+[source, pkl]
+----
+hidden const foo = 1
+
+open local class Foo {}
+----
+
+==== [0010] Class bodies
+
+Class bodies must have the opening `{` in the same line as the previous token. +
+A new line must follow the opening `{`. +
+The closing `}` should be in their own line. +
+An empty body should have no new lines or spaces between `{` and `}`.
+
+.input
+[source, pkl]
+----
+class Foo {
+
+}
+
+class Bar
+{
+  qux = 1
+}
+
+class Baz { prop = 0 }
+----
+
+.output
+[source, pkl]
+----
+class Foo {}
+
+class Bar {
+  qux = 1
+}
+
+class Baz {
+  prop = 0
+}
+----
+
+==== [0011] Object members
+
+Object members must be either all defined in a single line or in separated lines. +
+Members in the same line must be separated by a semicolon.
+
+.input
+[source, pkl]
+----
+foo: Listing<Int> = new {1 2   3; 4;5 6  7}
+
+bar: Listing<Int> = new { 1 2
+  3
+  4
+}
+
+lineIsTooBig: Listing<Int> = new { 999999; 1000000; 1000001; 1000002; 1000003; 1000004; 1000005; 1000006 }
+
+baz = new Dynamic {
+  1 2
+  3 4
+
+  ["foo"] = 3; bar = 30
+
+
+  baz = true
+}
+
+qux = new Dynamic {1 2 3 prop="prop"; [0]=9}
+----
+
+.output
+[source, pkl]
+----
+foo: Listing<Int> = new { 1; 2; 3; 4; 5; 6; 7 }
+
+bar: Listing<Int> = new {
+  1
+  2
+  3
+  4
+}
+
+lineIsTooBig: Listing<Int> = new {
+  999999
+  1000000
+  1000001
+  1000002
+  1000003
+  1000004
+  1000005
+  1000006
+}
+
+baz = new Dynamic {
+  1
+  2
+  3
+  4
+
+  ["foo"] = 3
+  bar = 30
+
+  baz = true
+}
+
+qux = new Dynamic { 1; 2; 3; prop="prop"; [0] = 9 }
+----
+
+==== [0012] Expressions
+
+If the expression is a `new`, amending, or literal function expression it should start in the same line as the `=`. +
+In multiline contexts, operators must be written in the next line, except minus (`-`). +
+The same operators will be flattened together and only indented once.
+
+.input
+[source, pkl]
+----
+foo {
+  123123123123 + 123123123123 * 123123123123 - 123123123123 / 123123123123 + 123123123123 ** 123123123123
+  2
+  3
+  4
+}
+
+bar = clazz.superclass == null || clazz.superclass.reflectee == Module || clazz.superclass.reflectee == Typed
+
+baz =
+new Listing {
+  1
+  2
+} |> mixin1 |> mixin2
+----
+
+.output
+[source, pkl]
+----
+foo {
+  123123123123 + 123123123123 * 123123123123 - 123123123123 / 123123123123
+    + 123123123123 ** 123123123123
+  2
+  3
+  4
+}
+
+bar =
+  clazz.superclass == null
+    || clazz.superclass.reflectee == Module
+    || clazz.superclass.reflectee == Typed
+
+baz =
+  new Listing {
+    1
+    2
+  }
+    |> mixin1
+    |> mixin2
+
+----
+
+==== [0013] Object parameters
+
+Object parameters must start in the same line as the opening `{`, unless it exceeds the line limit. +
+A new line must follow the `->`.
+
+.input
+[source, pkl]
+----
+foo {
+  a, b, c -> a
+}
+----
+
+.output
+[source, pkl]
+----
+foo { a, b, c ->
+  a
+}
+----
+
+==== [0014] If expressions
+
+An `if` that spans multiple lines must have the then and else clauses indented. +
+Both clauses must be in their own line. +
+If the else clause is followed by another `if`, it must not be indented and start in the same line as the `else`. +
+An `if` will be written in a single line if it fits. +
+
+.input
+[source, pkl]
+----
+foo = if (predicate) 0
+  else 1
+
+bar =
+  if (isItTooBigToFitInASingleLine) spanTheExpressionOverMultipleLines
+  else fitEverythingInASingleLine
+
+baz =
+  if (somePredicate)
+    firstComputation
+  else
+    if (anotherPredicate)
+      secondComputation
+    else
+      thirdComputation
+----
+
+.output
+[source, pkl]
+----
+foo = if (predicate) 0 else 1
+
+bar =
+  if (isItTooBigToFitInASingleLine)
+    spanTheExpressionOverMultipleLines
+  else
+    fitEverythingInASingleLine
+
+baz =
+  if (somePredicate)
+    firstComputation
+  else if (anotherPredicate)
+    secondComputation
+  else
+    thirdComputation
+----
+
+==== [0015] Let expressions
+
+The expression following the let must be indented if it doesn't fit a single line. +
+A let followed by another let must not be indented. +
+If the binding expression spans multiple lines, the opening and closing parentheses
+must be on their own line and the whole binding must be indented.
+
+.input
+[source, pkl]
+----
+foo =
+  let (x = 1)
+    x
+
+bar =
+  let (x = 1)
+    let (y = 2)
+      new Listing {
+        x
+        y
+      }
+
+baz =
+  let (value = new Listing {
+  1 2})
+    value
+----
+
+.output
+[source, pkl]
+----
+foo = let (x = 1) x
+
+bar =
+  let (x = 1)
+  let (y = 2)
+    new Listing {
+      x
+      y
+    }
+
+baz =
+  let (
+    value = new Listing {
+      1
+      2
+    }
+  )
+    value
+----
+
+==== [0016] Doc comments
+
+There must be no empty line between a doc comment and its target. +
+There must be no spurious `/` at the beginning of a doc comment. +
+There must be a space after the `///`. +
+Doc comments must not contain blank lines.
+
+.input
+[source, pkl]
+----
+/// A foo
+
+foo = 1
+
+///// comment
+bar = 1
+
+///comment
+baz = 1
+
+/// the line bellow cannot have trailling whitespaces
+///
+/// line2
+qux = 1
+----
+
+.output
+[source, pkl]
+----
+/// A foo
+foo = 1
+
+/// comment
+bar = 1
+
+/// comment
+baz = 1
+
+/// the line bellow cannot have trailling whitespaces
+///
+/// line2
+qux = 1
+
+----
+
+==== [0017] Line and block comments
+
+Comments will be kept, as much as possible, in the same position relative to the input. +
+They will count towards the line limit. +
+
+.input
+[source, pkl]
+----
+// line comment
+foo = 1 // reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long comment
+
+bar = 1 + /* block comment */
+  1
+----
+
+.output
+[source, pkl]
+----
+// line comment
+foo = 1 // reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long comment
+
+bar =
+  1 + /* block comment */
+    1
+----
+
+==== [0018] Type aliases
+
+Type aliases must be written in a single line if they fit the line limit. +
+There should be no line break between the `typealias` keyword and the typealias name.
+
+.input
+[source, pkl]
+----
+typealias NonEmptyString =
+  String(!isEmpty)
+----
+
+.input
+[source, pkl]
+----
+typealias NonEmptyString = String(!isEmpty)
+----
+
+==== [0019] Chained methods and properties
+
+Chains of methods and properties must be written in a single line if it doesn't go over the maximum line limit. +
+Chains that don't fit a single line must be separated into a new indented line containing the dot. +
+Chains of 2 or more methods where at least one contains a function literal must break lines.
+
+.input
+[source, pkl]
+----
+foo = bar.baz.
+  qux(1)
+
+prop = someObject.propertyAccess1.propertyAccess2.methodAccess1(parameter1, parameter2).methodAccess2(1, 2, 3)
+
+// break lines even though it fits
+res = list.map((it) -> it.partition).filter((it) -> it.predicate)
+----
+
+.output
+[source, pkl]
+----
+foo = bar.baz.qux(1)
+
+prop =
+  someObject
+    .propertyAccess1
+    .propertyAccess2
+    .methodAccess1(parameter1, parameter2)
+    .methodAccess2(1, 2, 3)
+
+// break lines even though it fits
+res =
+  list
+    .map((it) -> it.partition)
+    .filter((it) -> it.predicate)
+
+----
+
+==== [0020] Annotations
+
+There must be no empty lines between annotations or between an annotation and its target.
+
+.input
+[source, pkl]
+----
+@Ann1
+
+@Ann2 {
+  foo = 1
+}
+
+bar = true
+----
+
+.output
+[source, pkl]
+----
+@Ann1
+@Ann2 {
+  foo = 1
+}
+bar = true
+----
+
+==== [0021] Multiline strings
+
+Multiline strings must have the opening and closing `"""` aligned in a new line according to the current indentation. +
+Indented white space that matches the indentation must be removed.
+
+.input
+[source, pkl]
+----
+// `.` is used here to represent white space
+foo = """
+....foo
+....
+......
+....bar
+...."""
+----
+
+.output
+[source, pkl]
+----
+// `.` is used here to represent white space
+foo =
+  """
+..foo
+
+....
+..bar
+.."""
+
+----
+
+== Compatibility
+
+N/A
+
+== Future directions
+
+More rules can be added (though we should be wary of altering existing rules). And with parse time variable resolution
+we could not only format but simplify code. +
+Example of things that could be simplified in the future:
+
+- Remove unused imports
+- Ignore unused function/let parameters
+- Reformat doc comments
+- Add the `const` modifier for `local` properties that could be const
+
+There's a fine line between what's the formatter responsibility and what's the linter. Simplification rules are
+probably better located in the linter.
+
+== Alternatives considered
+
+Have a customizable formatter: this belongs in a text editor, not in the language itself. It also doesn't solve the
+problem of having a single ruleset/source of truth.
+
+== Acknowledgements
+
+N/A
