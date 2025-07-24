@@ -1,0 +1,332 @@
+= HTTP Rewrites
+
+* Proposal: link:./SPICE-0016-http-rewrites.adoc[SPICE-0016]
+* Status: Accepted
+* Implemented in: 0.29
+* Category: Language, Tooling
+
+== Introduction
+
+This SPICE proposes a new evaluator option to allow rewriting HTTP URLs, with the intention of supporting package mirroring.
+
+This proposal supersedes https://github.com/apple/pkl-evolution/pull/4[SPICE-0002].
+
+NOTE: The design of the mirror server is out-of-scope for this proposal.
+
+== Motivation
+
+For systems that require run-time air-gapping, packages imported from `pkg.pkl-lang.org` or other sites on the internet are not available.
+This can be remedied by pre-populating a cache directory with all required dependencies (see link:SPICE-0001-import-graph-analyzer-api.adoc[SPICE-0001]).
+When dependencies can not be determined ahead of time, pre-populating the cache is not an option.
+Mirroring packages from internet repositories in a local store is insufficient, because the mirrored packages may have hard-coded dependencies.
+Importing mirrored packages, using URIs pointing to the mirror, will eventually evaluate `import`s of those hard-coded dependencies, referring to external sites.
+
+== Proposed Solution
+
+A new HTTP setting will be added, called `rewrites`.
+A rewrite is a mapping of HTTP prefixes.
+For example, a rewrite might look like this:
+
+.~/.pkl/settings.pkl
+[source,pkl]
+----
+amends "pkl:settings"
+
+http {
+  rewrites {
+    ["https://foo.org/"] = "https://bar.org/"
+  }
+}
+----
+
+This will replace all outbound calls to `https://foo.org/` with an outbound call to `https://bar.org/`.
+
+In practice, an HTTP rewrite for Apple's published packages might look like:
+
+.~/.pkl/settings.pkl
+[source,pkl]
+----
+amends "pkl:settings"
+
+http {
+  rewrites {
+    ["https://pkg.pkl-lang.org/"] = "https://my.internal.mirror/pkg-pkl-lang/"
+    ["https://github.com/"] = "https://my.internal.mirror/github-releases/"
+  }
+}
+----
+
+With this setup, Pkl will make HTTP calls to `https://my.internal.mirror` when downloading Pkl packages.
+In practice, this would be a server that fetches those assets from the underlying locations and responds with the same bytes.
+
+== Detailed design
+
+Underneath the hood, Pkl makes all outbound requests using `org.pkl.core.http.RequestRewritingClient`.
+Currently, this client modifies outbound requests to add Pkl's user-agent, and optionally a port.
+This client will be modified to also rewrite the entire URI if set.
+
+The HTTP client will _not_ execute a rewrite in the case of 3XX response codes.
+
+In the case of failed requests, the thrown message includes details about the rewrite.
+
+Sample message:
+
+[source]
+----
+Pkl Error
+An I/O error occurred when making request GET /foo:
+Connection reset
+
+Request was rewritten:
+  Original:  https://foo.com/foo
+  Rewritten: https://bar.com/foo
+----
+
+A rewrite rule has a case-insensitive match on schemes and hostnames.
+
+Thus, a rewrite rule of `\https://foo.com/` will match `HTTPS://FOO.COM/`, `\https://FOO.COM/`, and also `\https://foo.COM/`.
+
+NOTE: Rewrite rules must start with `http://` or `https://` (see <<validation>>).
+
+An the case of multiple matches, the longest rewrite rule has precedence over a shorter rewrite rule.
+This means that the most specific rule wins.
+
+In the following example, `\https://example.com/foo/` is the longest and is thus used to rewrite a request to `\https://example.com/foo/qux.pkl`.
+
+[source,pkl]
+----
+rewrites {
+  ["https://example.com/foo/"] = "<rewrite1>"
+  ["https://example.com/"] = "<rewrite2>"
+}
+----
+
+[[configuration-api]]
+=== Configuration API
+
+HTTP rewrites can be configured via the standard library, in Java as an API, as a CLI flag, as a server message API, and as a Gradle API.
+
+Users of the `pkl` CLI are encouraged to configure HTTP rewrites in `~/.pkl/settings.pkl` for the purpose of package mirroring.
+This will have the effect of enabling mirroring for all `pkl` CLI calls for that shell user.
+
+==== Standard Library
+
+A new property will be added to class `pkl.EvaluatorSettings.Http`.
+
+.EvaluatorSettings.pkl
+[source,pkl]
+----
+const local hostnameRegex = Regex(#"https?://([^/?#]*)"#)
+
+const local hasNonEmptyLowercaseHostname = (it: String) ->
+  let (hostname = hostnameRegex.findMatchesIn(it).getOrNull(0)?.groups?.getOrNull(1)?.value)
+    hostname != null
+      && hostname.length > 0
+      && hostname.toLowerCase() == hostname
+
+/// A key or value in [Http.rewrites].
+///
+/// Rewrite targets must satisfy the following:
+///
+/// * It starts with either `http://`, or `https://`.
+/// * It ends with `/`.
+/// * It has a non-empty and lowercased hostname.
+typealias HttpRewrite = String(
+  startsWith(Regex("https?://")),
+  endsWith("/"),
+  hasNonEmptyLowercaseHostname
+)
+
+class Http {
+  @Since { version = "0.29.0" }
+  rewrites: Mapping<HttpRewrite, HttpRewrite>?
+}
+----
+
+This property can then be set in a PklProject, or the settings file, because they both have properties of type `Http`:
+
+.PklProject
+[source,pkl]
+----
+amends "pkl:PklProject"
+
+evaluatorSettings {
+  http {
+    rewrites {
+      // etc
+    }
+  }
+}
+----
+
+~/.pkl/settings.pkl
+[source,pkl]
+----
+amends "pkl:settings"
+
+http {
+  rewrites {
+    // etc
+  }
+}
+----
+
+==== Java API
+
+Users of the Java API can configure HTTP settings when building `org.pkl.core.http.HttpClient` via the builder.
+
+The following methods will be added:
+
+[source,java]
+----
+interface HttpClient {
+  interface Builder {
+    Builder setRewrites(Map<String, String> rewrites);
+
+    Builder addRewrite(String sourcePrefix, String targetPrefix);
+  }
+}
+----
+
+==== Server API
+
+Users of other language bindings (Kotlin, Go, etc), can configure rewrites via property `http` in `CreateEvaluatorRequest`:
+
+[source,pkl]
+----
+class CreateEvaluatorRequest {
+  http: Http
+}
+
+class Http {
+  rewrites: Mapping<String, String>?
+}
+----
+
+==== Gradle API
+
+Class `BasePklSpec` will have a new property:
+
+[source,java]
+----
+class BasePklSpec {
+  MapProperty<String, String> getHttpRewrites();
+}
+----
+
+It can then be set in any Pkl task:
+
+.build.gradle.kts
+[source,kotlin]
+----
+pkl {
+  evaluators {
+    register("evalPkl") {
+      httpRewrites = mapOf("https://foo.com" to "https://bar.com")
+    }
+  }
+}
+----
+
+==== CLI flag
+
+A new flag is introduced: `--http-rewrite`.
+
+It accepts `key=value` pairs, and can be repeated.
+
+Example:
+[source,shell]
+----
+pkl eval \
+  --http-rewrite https://foo.com/=https://bar.com/ \
+  myModule.pkl
+----
+
+This flag will be available to commands that use common CLI options (for example, `eval`, `test`, `project`).
+
+=== Security checks
+
+All outbound requests will be checked against the `--allowed-modules` and `--allowed-resources` CLI flags, and their respective settings in other contexts.
+This is also the case with URL rewriting.
+
+[[validation]]
+=== Validation
+
+Rewrite rules have the following requirements:
+
+1. They must start with either `http://` or `https://`, and end in `/`.
+2. They must end in `/`. this prevents a scenario where users declare a rule like `\https://foo.com/`, and unintentionally match a hostname like `\https://foo.community/`.
+
+=== Error modes
+
+==== Invalid rewrite rule
+
+Validation is performed at the site where the rewrite rule is configured.
+
+* Pkl rewrite rules (those set in `~/.pkl/settings.pkl` or `PklProject`) will be surfaced as a Pkl validation error.
+* CLI flags will be surfaced as invalid flag arguments.
+* Gradle rewrite rules will throw a `GradleException`.
+* Otherwise, an error is thrown when building the evaluator.
+
+== Compatibility
+
+This change is strictly backwards compatible with current versions of Pkl; any existing program will continue to work as-is.
+
+Users of the <<configuration-api,new API>> will need to use this version of Pkl or newer.
+
+== Future directions
+
+N/A
+
+== Alternatives considered
+
+=== Regex-based replacements
+
+Another option is to allow users to configure rewrites using regexes.
+
+This allows for more complex replacement patterns, where placeholders are used to construct replacement URLs.
+
+This is particularly useful for setting up package mirroring for pkg.pkl-lang.org, which is really just a redirect site for GitHub releases.
+
+For example, assuming that `https://my.github.mirror` is a straight mirror for GitHub.com, the following settings are sufficient to set up package mirroring for packages from pkg.pkl-lang.org:
+
+[source,pkl]
+----
+http {
+  rewrites {
+    [#"https://pkg\.pkl-lang\.org/(.+)/(.+)#"] = "https://my.github.mirror/apple/$1/releases/download/$2/$2"
+    [#"https://pkg\.pkl-lang\.org/github\.com/(.+)/(.+)/(.+)#"] = "https://my.github.mirror/$1/$2/releases/download/$3/$3"
+    [#"https://github\.com/(.+)"#] = "https://my.github.mirror/$1"
+  }
+}
+----
+
+There are some downsides to regex-based replacements.
+
+For one, they are more error-prone.
+Regex tokens need to be escaped, and it can be a common mistake to assume that `.` is a verbatim dot in `--http-rewrite https://foo.com=https://bar.com`.
+
+Secondly, different regular expression engines behave differently;
+A Java regex is not the same as a PCRE regex.
+Using regular expressions to describe string replacements can be challenging to debug if configured from another language whose regular expressions follow different semantics (e.g. PCRE, JavaScript).
+
+Thirdly, regular expressions are brittle, can be hard to understand, and can lead to hard-to-maintain configurations (How does this regex turn into my replacement?).
+
+=== Module/Resource URI rewrites (SPICE-0002)
+
+https://github.com/apple/pkl-evolution/pull/4[SPICE-0002] explores module/resource URI rewrites.
+
+That proposal has differs from this proposal in the following ways:
+
+1. The rewrite happens by replacing the resolved module URI or resource URI (e.g. `read("http://foo.com")` is replaced with `read("https://bar.com")`)).
+2. The rewrite allows any scheme to be swapped with any other scheme.
+
+However, this type of rewrite is not sufficient for package mirroring.
+The in-language URIs have schemes `package:` or `projectpackage:`, and the outbound HTTP calls here are an implementation of the module reader or resource reader.
+Specifically, package URLs invoke two HTTP requests; one to fetch JSON metadata, and one to fetch package zip contents.
+
+If `package://pkg.pkl-lang.org/foo@1.0.0#/myfile.txt` is replaced with `package://my.internal.mirror/foo@1.0.0#/myfile.txt`, this alone cannot actually mirror the package, because Pkl needs to understand that the package zip URL _also_ needs to be rewritten.
+
+== Acknowledgements
+
+Thanks to https://github.com/holzensp[@holzensp] for doing the work on the initial SPICE!
