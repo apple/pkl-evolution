@@ -2,15 +2,9 @@
 
 * Proposal: link:./SPICE-0002-uri-rewriting-for-mirroring.adoc[SPICE-0002]
 * Author: link:https://github.com/holzensp[Philip Hölzenspies]
-* Status: Suspended
-* Implemented in: None
+* Status: Rejected in favor of link:./SPICE-0013-bytes-standard-library.adoc[SPICE-0013]
+* Implemented in: N/A
 * Category: Tooling
-
-== Suspended
-
-This SPICE is suspended, meaning it is considered "not right for right now."
-With the introduction of link:https://github.com/apple/pkl-evolution/blob/main/spices/SPICE-0004-HTTP-Proxy-Support.adoc[HTTP Proxy support], the need for URI rewriting is significantly reduced.
-It is published for provenance reasons and for possible revival, should URI rewriting become necessary for other use cases.
 
 == Introduction
 
