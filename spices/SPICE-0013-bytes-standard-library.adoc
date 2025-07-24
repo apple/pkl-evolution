@@ -2,8 +2,8 @@
 
 * Proposal: link:./SPICE-0013-bytes-standard-library.adoc[SPICE-0013]
 * Author: https://github.com/bioball[Dan Chao]
-* Status: TBD
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: 0.29
 * Category: Language, Standard Library
 
 == Introduction
