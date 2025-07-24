@@ -1,8 +1,8 @@
 = HTTP Rewrites
 
 * Proposal: link:./SPICE-0016-http-rewrites.adoc[SPICE-0016]
-* Status: TBD
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: 0.29
 * Category: Language, Tooling
 
 == Introduction
@@ -86,7 +86,7 @@ A rewrite rule has a case-insensitive match on schemes and hostnames.
 
 Thus, a rewrite rule of `\https://foo.com/` will match `HTTPS://FOO.COM/`, `\https://FOO.COM/`, and also `\https://foo.COM/`.
 
-NOTE: Rewrite rules must have lowercased scheme and host segments (see <<validation>>).
+NOTE: Rewrite rules must start with `http://` or `https://` (see <<validation>>).
 
 An the case of multiple matches, the longest rewrite rule has precedence over a shorter rewrite rule.
 This means that the most specific rule wins.
@@ -104,7 +104,7 @@ rewrites {
 [[configuration-api]]
 === Configuration API
 
-HTTP rewrites can be configured via the standard library, in Java as an API, as a server message API, and as a Gradle API.
+HTTP rewrites can be configured via the standard library, in Java as an API, as a CLI flag, as a server message API, and as a Gradle API.
 
 Users of the `pkl` CLI are encouraged to configure HTTP rewrites in `~/.pkl/settings.pkl` for the purpose of package mirroring.
 This will have the effect of enabling mirroring for all `pkl` CLI calls for that shell user.
@@ -238,7 +238,7 @@ Example:
 [source,shell]
 ----
 pkl eval \
-  --http-rewrite https://foo.com=https://bar.com \
+  --http-rewrite https://foo.com/=https://bar.com/ \
   myModule.pkl
 ----
 
@@ -255,15 +255,13 @@ This is also the case with URL rewriting.
 Rewrite rules have the following requirements:
 
 1. They must start with either `http://` or `https://`, and end in `/`.
-For example, this prevents a scenario where users declare a rule like `\https://foo.com`, and unintentionally match a hostname like `\https://foo.community`.
-2. Rewrite rules must also have a non-empty, lowercased scheme and hostname.
-This is because schemes and hostnames are case-insensitive, and this avoids an issue where users can specify ambiguous rewrite rules.
+2. They must end in `/`. this prevents a scenario where users declare a rule like `\https://foo.com/`, and unintentionally match a hostname like `\https://foo.community/`.
 
 === Error modes
 
 ==== Invalid rewrite rule
 
-Validation is performed at the side where the rewrite rule is configured.
+Validation is performed at the site where the rewrite rule is configured.
 
 * Pkl rewrite rules (those set in `~/.pkl/settings.pkl` or `PklProject`) will be surfaced as a Pkl validation error.
 * CLI flags will be surfaced as invalid flag arguments.
