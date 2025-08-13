@@ -45,33 +45,36 @@ The grammar will be updated to accept trailing commas.
 
 In comma-separated syntax elements with a newline between the final element and the terminating token add a trailing comma after the final element.
 
+
 [source,pkl]
 ----
 // before formatting
-x = myMethod(1, 2, 3)
+x = myMethod(<expr>, <expr>, <expr>)
 y = myMethod(
-  1, 2, 3
+  <expr>, <expr>, <expr>
 )
 z = myMethod(
-  1,
-  2,
-  3
+  <expr>,
+  <expr>,
+  <expr>
 )
 
 // after formatting
-x = myMethod(1, 2, 3) // <1>
+x = myMethod(<expr>, <expr>, <expr>) // <1>
 y = myMethod(
-  1, 2, 3, // <2>
+  <expr>, <expr>, <expr>, // <2>
 )
 z = myMethod(
-  1,
-  2,
-  3, // <3>
+  <expr>,
+  <expr>,
+  <expr>, // <3>
 )
 ----
 <1> No newline is present between the final argument and the `)` so no trailing comma is added.
 <2> A newline is present between the final argument and the `)` so a trailing comma is added. This happens even with multiple/all arguments on the same line.
 <3> A newline is present between the final argument and the `)` so a trailing comma is added.
+
+The formatter may not produce these exact transformations; these examples are to illustrate the trailing comma rule only.
 
 == Compatibility
 
