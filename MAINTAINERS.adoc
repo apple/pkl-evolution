@@ -6,4 +6,5 @@ This page lists all active Maintainers of this repository.
 
 * https://github.com/bioball[Daniel Chao]
 * https://github.com/stackoverflow[Islon Scherer]
+* https://github.com/HT154[Jen Basch]
 * https://github.com/holzensp[Philip Hölzenspies]
