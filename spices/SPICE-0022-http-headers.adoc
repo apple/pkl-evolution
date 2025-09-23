@@ -1,0 +1,92 @@
+= Custom HTTP Headers
+
+* Proposal: link:./SPICE-0022-http-headers.adoc[SPICE-0022]
+* Author: link:https://github.com/kyokuping[kyokuping]
+* Status: Proposed
+* Category: Language, Standard Library, Tooling
+
+== Introduction
+
+This SPICE proposes a new evaluator option to allow adding custom HTTP headers to outbound requests, with the ability to target specific URL prefixes.
+
+== Motivation
+
+When Pkl interacts with HTTP resources, it may need to provide authentication tokens or other custom headers to access them. For example, a Pkl module might be hosted in a private repository that requires an `Authorization` header for access.
+
+Currently, there is no way to add custom headers to Pkl's HTTP requests. This limits Pkl's ability to interact with a wide range of HTTP-based resources.
+
+== Proposed Solution
+
+A new HTTP setting will be added, called `headers`. This setting allows users to specify a list of headers to be added to outbound HTTP requests. To avoid leaking credentials, headers can be configured on a per-URL-prefix basis.
+
+For example, to provide an authentication token for a specific host, the configuration would look like this:
+
+.~/.pkl/settings.pkl
+[source,pkl]
+----
+amends "pkl:settings"
+
+http {
+  headers {
+    ["https://my.private.repo/"] {
+      Pair("Authorization", "Bearer my-secret-token")
+    }
+  }
+}
+----
+
+This will add the `Authorization` header to all requests sent to `https://my.private.repo/` and its sub-paths.
+
+== Detailed design
+
+The `pkl.EvaluatorSettings.Http` class will be extended with a new `headers` property.
+
+.pkl:EvaluatorSettings
+[source,pkl]
+----
+class Http {
+  // ... existing properties
+
+  /// HTTP headers to add to outbound requests targeting specified URLs.
+  headers: Mapping<HttpRewrite, Listing<Pair<String, String>>>?
+}
+----
+
+The `HttpRewrite` typealias from `SPICE-0016-http-rewrites` will be reused to define the URL prefixes.
+
+When multiple prefixes match a request URL, the longest prefix will be chosen, ensuring that the most specific rule is applied.
+
+A new CLI flag, `--http-header`, will be introduced to allow specifying headers from the command line. The flag will accept key-value pairs in the format `<url-prefix>=<header-name>:<header-value>[,<header-name>:<header-value>...]`.
+
+Example:
+[source,shell]
+----
+pkl eval \
+  --http-header "https://my.private.repo/:Authorization=Bearer my-secret-token" \
+  myModule.pkl
+----
+
+The HTTP client will be modified to check for matching header configurations for each outgoing request and add the corresponding headers.
+
+== Compatibility
+
+This change is strictly backward-compatible. Existing Pkl programs will continue to work as-is.
+
+== Future directions
+
+Future enhancements could include support for more complex header manipulation, such as removing default headers or adding headers based on regular expression matching on the URL.
+
+== Alternatives considered
+
+=== Global HTTP headers
+
+The initial proposal involved a simpler approach of having a single set of custom headers that would be applied to all outbound HTTP requests. This was rejected due to security concerns. Sending the same set of headers, which might include authentication tokens, to all hosts is a significant security risk. The per-URL-prefix approach provides a more secure way to manage custom headers.
+
+=== Auth-specific support
+
+Someone could argue it'd make more sense to specifically support auth handling rather than exposing the full ability to add custom HTTP headers. While this can be considered more future-proof in terms of exposing minimal API surface to maintain compatibility, this would limit the potential of supporting many different use cases outside of auth. That being said, adding separate auth support can also be considered later, mostly for supporting complex auth flows like OAuth.
+
+== Acknowledgements
+
+Thanks to the Pkl team for their feedback on the initial proposal, which helped shape the more secure and flexible design presented in this SPICE.
+
