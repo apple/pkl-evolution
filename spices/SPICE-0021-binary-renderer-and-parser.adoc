@@ -55,7 +55,16 @@ New language will be added to the {uri-bindings-specification}[specification] re
 
 > Additional slots may be added to types in future Pkl releases. Decoders *must* be designed to defensively discard values beyond the number of known slots for a type or provide meaningful error messages.
 
-Encoding `Class` and `TypeAlias` values now require three slots (previously one) storing the module URI and qualified name of the type.
+Additional specificity will be added to define exactly how type names are encoded:
+
+> * When the module URI is `pkl:base`:
+> ** If the type name is `ModuleClass`, this type represents the module class of `pkl:base`.
+> ** Otherwise, the type name corresponds to a type in `pkl:base`.
+> * For all other module URIs:
+> ** When the type name contains `\#`, the string after the `#` character corresponds to a type in that module. The string before the `#` is the name of the module.
+> ** Otherwise, the type name is the name of the module and represents the class of the module.
+
+Encoding `Class` and `TypeAlias` values now require three slots (previously one) additionally storing the module URI and name of the type.
 
 |===
 |Pkl type |Slot 1 2+|Slot 2 2+|Slot 3 2+|Slot 4
@@ -65,25 +74,25 @@ Encoding `Class` and `TypeAlias` values now require three slots (previously one)
 |link:{uri-stdlib-Class}[Class]
 |`0x0C`
 |link:{uri-messagepack-str}[str]
-|Module URI
+|Class name
 |link:{uri-messagepack-str}[str]
-|Qualified name
+|Module URI
 |
 |
 
 |link:{uri-stdlib-TypeAlias}[TypeAlias]
 |`0x0D`
 |link:{uri-messagepack-str}[str]
-|Module URI
+|TypeAlias name
 |link:{uri-messagepack-str}[str]
-|Qualified name
+|Module URI
 |
 |
 
 |===
 
 IMPORTANT: The encoding of link:{uri-stdlib-Function}[Function] values has not changed.
-While it is still possible to render these value to `pkl-binary`, the Pkl and Java APIs for parsing `pkl-binary` will throw an error if decoding a function is attempted.
+While it is still possible to render these value to `pkl-binary`, the Pkl and Java APIs for parsing `pkl-binary` proposed here will error if decoding is attempted.
 
 === Pkl API
 
@@ -129,54 +138,77 @@ class PklBinaryEncodingParser {
 To support the new Pkl APIs for rendering binary data (`BytesRenderer`) and `pkl-binary` specifically (`PklBinaryEncodingRenderer`), the `org.pkl.core.stdlib.AbstractRenderer` class will have all `String`-specific functionality extracted to a new `AbstractStringRenderer` subclass.
 Existing `AbstractRenderer` subclasses in the codebase will subclass `AbstractStringRenderer` instead.
 
-A new class `org.pkl.core.PklBinaryEncoder` extending `AbstractRenderer` will be added to implement encoding to `pkl-binary`.
-
-A new class `org.pkl.core.PklBinaryDecoder` will be added to implement decoding of `pkl-binary` data:
+A new class `org.pkl.core.PklBinaryDecoder` will be added to implement decoding of `pkl-binary` data to user-facing values (`PObject` and friends):
 
 [source,java]
 ----
 /**
  * A decoder/parser for the <a
  * href="https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html"><code>
- * pkl-binary</code></a> encoding.
+ * pkl-binary</code></a> encoding. Returns "exported" value types like PObject, Map, List, and
+ * primitives.
  */
-public class PklBinaryDecoder {
+public class PklBinaryDecoder extends AbstractPklBinaryDecoder {
 
-  /**
-   * This interface provides callbacks for callers to implement to provide the implementation for
-   * importing Pkl types.
-   */
-  public interface Importer {
-    /**
-     * Called by the decoder when a Pkl class should be imported. This happens when decoding {@link
-     * VmClass} or {@link VmTyped} values.
-     *
-     * @param name is the qualified name of the class or module
-     * @param moduleUri is the URI of the module or the class's enclosing module
-     * @return The imported class
-     */
-    VmClass importClass(String name, URI moduleUri);
-
-    /**
-     * Called by the decoder when a Pkl class should be imported. This happens when decoding {@link
-     * VmTypeAlias} values.
-     *
-     * @param name is the qualified name of the typealias
-     * @param moduleUri is the URI of the typealias's enclosing module
-     * @return The import typealias
-     */
-    VmTypeAlias importTypeAlias(String name, URI moduleUri);
+  private PklBinaryDecoder(MessageUnpacker unpacker) {
+    super(unpacker);
   }
 
-  public PklBinaryDecoder(MessageUnpacker unpacker, Importer importer);
-
   /**
-   * Decode a value from the supplied {@link MessageUnpacker}
+   * Decode a value from the supplied byte array.
    *
    * @return the encoded value
    */
-  public Object decode();
+  public static Object decode(byte[] bytes);
+
+  /**
+   * Decode a value from the supplied {@link ByteArrayInputStream}.
+   *
+   * @return the encoded value
+   */
+  public static Object decode(ByteArrayInputStream inputStream);
+
+  /**
+   * Decode a value from the supplied {@link MessageUnpacker}.
+   *
+   * @return the encoded value
+   */
+  public static Object decode(MessageUnpacker unpacker);
+}
 ----
+
+NOTE: This proposal opts not to implement a binary encoder that operates on exported value types, i.e. encoding `PObject` and friends to `pkl-binary`.
+This is primarily because exporting runtime values (`Vm*` types) or decoding `pkl-binary` to API values (`P*` types) is a lossy operation.
+Pkl `List`/`Listing` and `Map`/`Mapping` values are exported/decoded to the same Java values (`List` and `Map`, respectively), making round-tripping impossible.
+
+A new `org.pkl.config.java.ConfigPklBinaryDecoder` class will be added to adapt binary decoding to link:{uri-docs}/java-binding/pkl-config-java.html#usage[existing Java configuration workflows].
+[source,java]
+----
+var encodedData; // some byte[], ByteBufferInputStream, or MessageUnpacker
+Config config;
+try (var decoder = ConfigPklBinaryDecoder.preconfigured()) {
+  config = decoder.decode(encodedData);
+}
+var pigeon = config.get("pigeon");
+var age = pigeon.get("age").as(int.class);
+var diet = pigeon.get("diet").as(JavaType.listOf(String.class));
+----
+
+Extensions will be added in `pkl-config-kotlin` to provide equivalent support for link:{uri-docs}/kotlin-binding/pkl-config-kotlin.html#usage[existing Kotlin configuration workflows].
+[source,kotlin]
+----
+val encodedData // some ByteArray, ByteBufferInputStream, or MessageUnpacker
+val evaluator = ConfigPklBinaryDecoder.preconfigured().forKotlin()
+val config = evaluator.use {
+  it.decode(encodedData)
+}
+val pigeon = config["pigeon"]
+val age = pigeon["age"].to<Int>()
+val hobbies = pigeon["diet"].to<List<String>>()
+----
+
+NOTE: Java classes implementing encoding/decoding of `pkl-binary` to runtime values (`Vm*` types) will be added to `pkl-core` but not exposed as public API.
+These types provide the internal implementation of the Pkl renderer/parser APIs.
 
 == Compatibility
 
