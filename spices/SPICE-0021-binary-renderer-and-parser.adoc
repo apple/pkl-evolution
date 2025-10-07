@@ -124,14 +124,24 @@ class PklBinaryEncodingParser {
   /// Parse `pkl-binary` data and return the original value.
   ///
   /// This operation will attempt to import any modules, classes or typealiases present in the data.
-  /// The `context` parameter is a module that is used to evaluate
-  /// [import security checks](https://pkl-lang.org/main/current/language-reference/index.html#security-checks).
-  /// Imports are subject to the evaluator's configured allowed modules.
+  /// Imports are subject to the standard [import security checks](https://pkl-lang.org/main/current/language-reference/index.html#security-checks).
   ///
   /// Cannot decode [Function] values.
-  external function parse(source: Resource|Bytes, context: Module): Any
+  external function parse(source: Resource|Bytes): Any
 }
 ----
+
+[WARNING]
+====
+The security checks performed during in-language binary decoding are not identical to the ones performed by an actual import.
+Specifically, checking of trust levels is skipped.
+This means that an imported module could construct and parse a `pkl-binary` payload to obtain `Typed`, `Class`, or `TypeAlias` values it would ordinarily be forbidden from obtaining directly.
+
+The Pkl team views this as acceptable.
+The trust levels mechanism is largely untouched from the early days of the language (ca. 2017) and no longer serves its original purpose of enforcing security invariants.
+Today, the allowed modules mechanism provides for tighter control over which modules may be loaded.
+We intend to revisit trust levels in the future.
+====
 
 === Java API
 
