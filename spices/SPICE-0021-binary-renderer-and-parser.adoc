@@ -13,7 +13,7 @@
 
 = Binary renderer and parser
 
-* Proposal: link:./SPICE-0021-binary-renderer-parser.adoc[SPICE-0021]
+* Proposal: link:./SPICE-0021-binary-renderer-and-parser.adoc[SPICE-0021]
 * Author: https://github.com/HT154[Jen Basch]
 * Status: Accepted or Rejected
 * Implemented in: Pkl 0.30
@@ -118,30 +118,7 @@ class PklBinaryEncodingRenderer extends BytesRenderer {
   /// Render a Pkl document as `pkl-binary`.
   external function renderDocument(value: Any): Bytes
 }
-
-/// Parse the [`pkl-binary` encoding format](https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html).
-class PklBinaryEncodingParser {
-  /// Parse `pkl-binary` data and return the original value.
-  ///
-  /// This operation will attempt to import any modules, classes or typealiases present in the data.
-  /// Imports are subject to the standard [import security checks](https://pkl-lang.org/main/current/language-reference/index.html#security-checks).
-  ///
-  /// Cannot decode [Function] values.
-  external function parse(source: Resource|Bytes): Any
-}
 ----
-
-[WARNING]
-====
-The security checks performed during in-language binary decoding are not identical to the ones performed by an actual import.
-Specifically, checking of trust levels is skipped.
-This means that an imported module could construct and parse a `pkl-binary` payload to obtain `Typed`, `Class`, or `TypeAlias` values it would ordinarily be forbidden from obtaining directly.
-
-The Pkl team views this as acceptable.
-The trust levels mechanism is largely untouched from the early days of the language (ca. 2017) and no longer serves its original purpose of enforcing security invariants.
-Today, the allowed modules mechanism provides for tighter control over which modules may be loaded.
-We intend to revisit trust levels in the future.
-====
 
 === Java API
 
@@ -159,11 +136,6 @@ A new class `org.pkl.core.PklBinaryDecoder` will be added to implement decoding 
  * primitives.
  */
 public class PklBinaryDecoder extends AbstractPklBinaryDecoder {
-
-  private PklBinaryDecoder(MessageUnpacker unpacker) {
-    super(unpacker);
-  }
-
   /**
    * Decode a value from the supplied byte array.
    *
@@ -172,18 +144,11 @@ public class PklBinaryDecoder extends AbstractPklBinaryDecoder {
   public static Object decode(byte[] bytes);
 
   /**
-   * Decode a value from the supplied {@link ByteArrayInputStream}.
+   * Decode a value from the supplied {@link InputStream}.
    *
    * @return the encoded value
    */
-  public static Object decode(ByteArrayInputStream inputStream);
-
-  /**
-   * Decode a value from the supplied {@link MessageUnpacker}.
-   *
-   * @return the encoded value
-   */
-  public static Object decode(MessageUnpacker unpacker);
+  public static Object decode(InputStream inputStream);
 }
 ----
 
@@ -191,14 +156,11 @@ NOTE: This proposal opts not to implement a binary encoder that operates on expo
 This is primarily because exporting runtime values (`Vm*` types) or decoding `pkl-binary` to API values (`P*` types) is a lossy operation.
 Pkl `List`/`Listing` and `Map`/`Mapping` values are exported/decoded to the same Java values (`List` and `Map`, respectively), making round-tripping impossible.
 
-A new `org.pkl.config.java.ConfigPklBinaryDecoder` class will be added to adapt binary decoding to link:{uri-docs}/java-binding/pkl-config-java.html#usage[existing Java configuration workflows].
+New static methods will be added to `org.pkl.config.java.Config` to adapt binary decoding to link:{uri-docs}/java-binding/pkl-config-java.html#usage[existing Java configuration workflows].
 [source,java]
 ----
-var encodedData; // some byte[], ByteBufferInputStream, or MessageUnpacker
-Config config;
-try (var decoder = ConfigPklBinaryDecoder.preconfigured()) {
-  config = decoder.decode(encodedData);
-}
+var encodedData; // some byte[] or InputStream
+var config = Config.from(encodedData);
 var pigeon = config.get("pigeon");
 var age = pigeon.get("age").as(int.class);
 var diet = pigeon.get("diet").as(JavaType.listOf(String.class));
@@ -207,18 +169,12 @@ var diet = pigeon.get("diet").as(JavaType.listOf(String.class));
 Extensions will be added in `pkl-config-kotlin` to provide equivalent support for link:{uri-docs}/kotlin-binding/pkl-config-kotlin.html#usage[existing Kotlin configuration workflows].
 [source,kotlin]
 ----
-val encodedData // some ByteArray, ByteBufferInputStream, or MessageUnpacker
-val evaluator = ConfigPklBinaryDecoder.preconfigured().forKotlin()
-val config = evaluator.use {
-  it.decode(encodedData)
-}
+val encodedData // some ByteArray or InputStream
+val config = Config.from(encodedData, ValueMapper.preconfigured().forKotlin())
 val pigeon = config["pigeon"]
 val age = pigeon["age"].to<Int>()
 val hobbies = pigeon["diet"].to<List<String>>()
 ----
-
-NOTE: Java classes implementing encoding/decoding of `pkl-binary` to runtime values (`Vm*` types) will be added to `pkl-core` but not exposed as public API.
-These types provide the internal implementation of the Pkl renderer/parser APIs.
 
 == Compatibility
 
@@ -232,6 +188,26 @@ These changes are potentially backwards-incompatible
 ** Libraries should support the prior one-slot encoding gracefully to remain compatible with older Pkl releases.
 
 == Future directions
+
+=== In-language `pkl-binary` Decoding
+
+This SPICE originally proposed an in-language `PklBinaryEncodingParser` class that would reconstitute rendered `pkl-binary` data to in-language types.
+This was removed from this iteration of the proposal due to concerns about how to handle module imports.
+One of Pkl's principals is that the import graph must be able to be calculated and analyzed statically.
+This means that all modules (potentially) used in encoded `pkl-binary` data must be static during parse time or defined by the calling code.
+
+There are two main implementation paths considered:
+
+* **In-language API**:
+This would require callers to pass in an already-imported set of modules from which to resolve `Typed`, `Class`, and `TypeAlias` values during parsing.
+There are usability concerns with this approach that may make it impractical for real-world usage.
+* **Language Construct**:
+Much like import expressions, this could only permit string literals for the URI to load, which severely limits flexibility of the feature.
+While this would enable statically determining imports at parse time, it also prevents callers from computing URIs.
+
+We've determined that we need more information on potential use cases before pursuing this feature further.
+
+=== Binary Format Evolution
 
 This proposal explicitly avoids proposing a versioning mechanism for the `pkl-binary` encoding in favor of formalizing forward compatibility for a subset of changes (adding fields to fixed-size structures).
 In the future, it may be necessary to make changes that do not fall into this category and are truly backwards-incompatible.
