@@ -104,14 +104,14 @@ These changes will be made in the `pkl:base` module:
 * `FileOutput.renderer` now accepts any `BaseValueRenderer` and its `bytes` and `text` properties are updated accordingly.
 * `module.output.renderer` now provides `pkl-binary` as a possible output format via the `pkl eval --format` flag.
 
-These new Pkl APIs will be added to a new stdlib module `pkl:encoding`:
+These new Pkl APIs will be added to a new stdlib module `pkl:pklbinary`:
 
 [source,pkl]
 ----
-module pkl.encoding
+module pkl.pklbinary
 
 /// Render values as the [`pkl-binary` encoding format](https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html).
-class PklBinaryEncodingRenderer extends BytesRenderer {
+class Renderer extends BytesRenderer {
   /// Render a Pkl value as `pkl-binary`.
   external function renderValue(value: Any): Bytes
 
@@ -122,18 +122,37 @@ class PklBinaryEncodingRenderer extends BytesRenderer {
 
 === Java API
 
-To support the new Pkl APIs for rendering binary data (`BytesRenderer`) and `pkl-binary` specifically (`PklBinaryEncodingRenderer`), the `org.pkl.core.stdlib.AbstractRenderer` class will have all `String`-specific functionality extracted to a new `AbstractStringRenderer` subclass.
+To support the new Pkl APIs for rendering binary data (`BytesRenderer`) and `pkl-binary` specifically (`VmPklBinaryEncodingRenderer`), the `org.pkl.core.stdlib.AbstractRenderer` class will have all `String`-specific functionality extracted to a new `AbstractStringRenderer` subclass.
 Existing `AbstractRenderer` subclasses in the codebase will subclass `AbstractStringRenderer` instead.
 
-A new class `org.pkl.core.PklBinaryDecoder` will be added to implement decoding of `pkl-binary` data to user-facing values (`PObject` and friends):
+New methods will be added to the `org.pkl.core.Evaluator` interface enabling clients to directly encode evaluation results to `pkl-binary`:
+
+[source,java]
+----
+public interface Evaluator {
+  // ...
+
+  /**
+   * Evaluates the Pkl expression represented as {@code expression}, returning a byte array of the
+   * <code>pkl-binary</code>-encoded representation of the result.
+   *
+   * @throws PklException if an error occurs during evaluation
+   * @throws IllegalStateException if this evaluator has already been closed
+   */
+  byte[] evaluateExpressionPklBinary(ModuleSource moduleSource, String expression);
+
+  // ...
+}
+----
+
+A new class `org.pkl.core.PklBinaryDecoder` will be added to implement decoding of `pkl-binary` data to user-facing (exported) values (`PObject` and friends):
 
 [source,java]
 ----
 /**
- * A decoder/parser for the <a
- * href="https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html"><code>
- * pkl-binary</code></a> encoding. Returns "exported" value types like PObject, Map, List, and
- * primitives.
+ * A decoder/parser for <code>pkl-binary</code>.
+ *
+ * <p>For how pkl-binary turns Java, see {@link Value}.
  */
 public class PklBinaryDecoder extends AbstractPklBinaryDecoder {
   /**
@@ -160,7 +179,7 @@ New static methods will be added to `org.pkl.config.java.Config` to adapt binary
 [source,java]
 ----
 var encodedData; // some byte[] or InputStream
-var config = Config.from(encodedData);
+var config = Config.fromPklBinary(encodedData);
 var pigeon = config.get("pigeon");
 var age = pigeon.get("age").as(int.class);
 var diet = pigeon.get("diet").as(JavaType.listOf(String.class));
@@ -170,7 +189,7 @@ Extensions will be added in `pkl-config-kotlin` to provide equivalent support fo
 [source,kotlin]
 ----
 val encodedData // some ByteArray or InputStream
-val config = Config.from(encodedData, ValueMapper.preconfigured().forKotlin())
+val config = Config.fromPklBinary(encodedData, ValueMapper.preconfigured().forKotlin())
 val pigeon = config["pigeon"]
 val age = pigeon["age"].to<Int>()
 val hobbies = pigeon["diet"].to<List<String>>()
@@ -178,11 +197,11 @@ val hobbies = pigeon["diet"].to<List<String>>()
 
 == Compatibility
 
-These changes are potentially backwards-incompatible
+These changes are potentially backwards-incompatible:
 
 * Subclasses of `org.pkl.core.stdlib.AbstractRenderer` outside of `pkl-core` will need to switch to extend `AbstractStringRenderer`.
 * Handling of superfluous slots in fixed-length structures in `pkl-binary` may impact language binding library implementations.
-** link:https://github.com/apple/pkl-go/pull/167[Fixed in pkl-go], to be released as part of v???.
+** link:https://github.com/apple/pkl-go/pull/167[Fixed in pkl-go], to be released as part of v0.12.0.
 ** pkl-swift already handles this cleanly.
 * The `pkl-binary` encoding now uses two additional (three total) slots for the `Class` and `TypeAlias` types.
 ** Libraries should support the prior one-slot encoding gracefully to remain compatible with older Pkl releases.
@@ -191,7 +210,7 @@ These changes are potentially backwards-incompatible
 
 === In-language `pkl-binary` Decoding
 
-This SPICE originally proposed an in-language `PklBinaryEncodingParser` class that would reconstitute rendered `pkl-binary` data to in-language types.
+This SPICE originally proposed an in-language `pklbinary.Parser` class that would reconstitute rendered `pkl-binary` data to in-language types.
 This was removed from this iteration of the proposal due to concerns about how to handle module imports.
 One of Pkl's principals is that the import graph must be able to be calculated and analyzed statically.
 This means that all modules (potentially) used in encoded `pkl-binary` data must be static during parse time or defined by the calling code.
