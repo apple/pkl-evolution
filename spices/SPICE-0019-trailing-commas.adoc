@@ -1,0 +1,85 @@
+= Trailing commas
+
+* Proposal: link:./SPICE-0019-trailing-commas.adoc[SPICE-0019]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: Accepted or Rejected
+* Implemented in: Pkl 0.30.0
+* Category: Language, Tooling
+
+== Introduction
+
+This SPICE proposes changes Pkl's grammar to allow trailing commas in comma-separated syntax elements.
+
+== Motivation
+
+Many languages—Swift included—allow trailing commas in comma-separated syntax elements.
+Allowing trailing commas allows users to add or reorder syntax elements in lists without incurring the effort (or diff) of managing the comma on the new/former final element.
+
+== Proposed Solution
+
+Pkl's grammar will be updated to accept trailing commas in these syntax elements:
+
+* Function parameter lists (method definitions)
+* Argument lists (method calls)
+* Type parameter lists (in class/module definitions)
+* Type argument lists (in declared type names, i.e. type annotations)
+* Function type parameter lists (function type annotations)
+* Type constraint lists
+* Object body parameter lists (sugared lambdas)
+
+== Detailed design
+
+Pkl's parser will be updated to accept trailing commas in syntax elements that are comma-separated lists.
+
+Corresponding changes will be necessary in the language's tooling:
+
+=== pkl-intellij
+
+The plugin's grammar will be updated to accept trailing commas.
+
+=== tree-sitter-pkl
+
+The grammar will be updated to accept trailing commas.
+
+=== pkl-formatter (see link:./SPICE-0014-canonical-formatter.adoc[SPICE-0014])
+
+In comma-separated syntax elements with a newline between the final element and the terminating token add a trailing comma after the final element.
+
+
+[source,pkl]
+----
+// before formatting
+x = myMethod(<expr>, <expr>, <expr>)
+y = myMethod(
+  <expr>, <expr>, <expr>
+)
+z = myMethod(
+  <expr>,
+  <expr>,
+  <expr>
+)
+
+// after formatting
+x = myMethod(<expr>, <expr>, <expr>) // <1>
+y = myMethod(
+  <expr>, <expr>, <expr>, // <2>
+)
+z = myMethod(
+  <expr>,
+  <expr>,
+  <expr>, // <3>
+)
+----
+<1> No newline is present between the final argument and the `)` so no trailing comma is added.
+<2> A newline is present between the final argument and the `)` so a trailing comma is added. This happens even with multiple/all arguments on the same line.
+<3> A newline is present between the final argument and the `)` so a trailing comma is added.
+
+The formatter may not produce these exact transformations; these examples are to illustrate the trailing comma rule only.
+
+== Compatibility
+
+This change has no impact on compatibility.
+This does involve a change the language's grammar, but it only admits inputs that were previously invalid.
+
+Changing the grammars in pkl-intellij and tree-sitter-pkl may result in cases where users mix newer tooling versions with older Pkl releases.
+In these cases, evaluation may fail with editors providing no feedback that the code is invalid.
