@@ -1,0 +1,243 @@
+:uri-docs: https://pkl-lang.org/main/current
+:uri-bindings-specification: {uri-docs}/bindings-specification/binary-encoding.html
+:uri-message-passing-api: {uri-docs}/bindings-specification/message-passing-api.html
+:uri-package-docs: https://pkl-lang.org/package-docs
+:uri-stdlib-baseModule: {uri-package-docs}/pkl/current/base
+:uri-stdlib-Class: {uri-stdlib-baseModule}/Class
+:uri-stdlib-TypeAlias: {uri-stdlib-baseModule}/TypeAlias
+:uri-stdlib-Function: {uri-stdlib-baseModule}/Function
+:uri-deepToTyped: {uri-package-docs}/pkg.pkl-lang.org/pkl-pantry/pkl.experimental.deepToTyped/current/deepToTyped/index.html
+:uri-messagepack-spec: https://github.com/msgpack/msgpack/blob/master/spec.md
+:uri-messagepack-str: {uri-messagepack-spec}#str-format-family
+:uri-messagepack-ext: {uri-messagepack-spec}#ext-format-family
+
+= Binary renderer and parser
+
+* Proposal: link:./SPICE-0021-binary-renderer-and-parser.adoc[SPICE-0021]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: Accepted or Rejected
+* Implemented in: Pkl 0.30
+* Category: Language, Standard Library
+
+== Introduction
+
+Pkl provides a {uri-bindings-specification}[binary encoding format] as part of its {uri-message-passing-api}[message passing API].
+This format encodes fully evaluated Pkl data without the loss of explicit type information characteristic of formats like JSON, YAML, and Pcf.
+
+This SPICE proposes new standard library and Java APIs for rendering and parsing the binary encoding format, which this proposal will refer to as `pkl-binary`.
+
+== Motivation
+
+Currently, the only way to render the result of Pkl evaluation to this format is to use the message passing API via a language binding library.
+An example of this workflow can be seen in link:https://github.com/apple/pkl-go-examples/tree/main/buildtimeeval[pkl-go-examples].
+
+However, there are several workflows where it would be useful to produce `pkl-binary`-encoded data within Pkl code:
+
+* Runtime loading of deploy-time rendered configuration data using language binding libraries.
+** A project using `pkl-go` or `pkl-swift` might prefer to use Pkl to define its configuration schema but not want to actually _evaluate_ Pkl at runtime.
+** Instead, the application's configuration might be rendered to `pkl-binary`, deployed with the app (eg. via link:https://kubernetes.io/docs/concepts/configuration/secret/[Kubernetes Secrets]), and loaded during application startup.
+** This avoids the requirement that the Pkl executable be present at runtime and avoids lossy intermediate formats like JSON that may not work in all cases (eg. polymorphism).
+* Optimized reuse of complex evaluation.
+** Large amounts of intermediate state may be serialized to disk as `pkl-binary` and efficiently re-loaded later.
+** This avoids serializing to lossy formats like JSON and inefficient or error-prone "re-hydration" of typed Pkl values on load using `toTyped()` or {uri-deepToTyped}[`deepToTyped`].
+* And more!
+
+== Proposed Solution
+
+New Pkl and Java APIs will be added to supporting rendering and parsing `pkl-binary` data.
+The encoding specification will also be amended to cover encoding/decoding of `Class` and `TypeAlias` values and to define expected behavior of clients around specification changes.
+
+== Detailed design
+
+=== Binary encoding
+
+New language will be added to the {uri-bindings-specification}[specification] requiring implementations to handle values encoded as fixed-length arrays with more slots than expected by either ignoring (skipping) unknown fields or providing helpful errors.
+
+> Additional slots may be added to types in future Pkl releases. Decoders *must* be designed to defensively discard values beyond the number of known slots for a type or provide meaningful error messages.
+
+Additional specificity will be added to define exactly how type names are encoded:
+
+> * When the module URI is `pkl:base`:
+> ** If the type name is `ModuleClass`, this type represents the module class of `pkl:base`.
+> ** Otherwise, the type name corresponds to a type in `pkl:base`.
+> * For all other module URIs:
+> ** When the type name contains `\#`, the string after the `#` character corresponds to a type in that module. The string before the `#` is the name of the module.
+> ** Otherwise, the type name is the name of the module and represents the class of the module.
+
+Encoding `Class` and `TypeAlias` values now require three slots (previously one) additionally storing the module URI and name of the type.
+
+|===
+|Pkl type |Slot 1 2+|Slot 2 2+|Slot 3 2+|Slot 4
+
+||code |type |description |type |description |type |description
+
+|link:{uri-stdlib-Class}[Class]
+|`0x0C`
+|link:{uri-messagepack-str}[str]
+|Class name
+|link:{uri-messagepack-str}[str]
+|Module URI
+|
+|
+
+|link:{uri-stdlib-TypeAlias}[TypeAlias]
+|`0x0D`
+|link:{uri-messagepack-str}[str]
+|TypeAlias name
+|link:{uri-messagepack-str}[str]
+|Module URI
+|
+|
+
+|===
+
+IMPORTANT: The encoding of link:{uri-stdlib-Function}[Function] values has not changed.
+While it is still possible to render these value to `pkl-binary`, the Pkl and Java APIs for parsing `pkl-binary` proposed here will error if decoding is attempted.
+
+=== Pkl API
+
+These changes will be made in the `pkl:base` module:
+
+* `BaseValueRenderer` is a new abstract class defining properties common to textual and binary renderers.
+* `ValueRenderer` now extends `BaseValueRenderer`.
+* `BytesRenderer` is new abstract class extending `BaseValueRenderer` defining methods for rendering documents and values as `Bytes`.
+* `FileOutput.renderer` now accepts any `BaseValueRenderer` and its `bytes` and `text` properties are updated accordingly.
+* `module.output.renderer` now provides `pkl-binary` as a possible output format via the `pkl eval --format` flag.
+
+These new Pkl APIs will be added to a new stdlib module `pkl:pklbinary`:
+
+[source,pkl]
+----
+module pkl.pklbinary
+
+/// Render values as the [`pkl-binary` encoding format](https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html).
+class Renderer extends BytesRenderer {
+  /// Render a Pkl value as `pkl-binary`.
+  external function renderValue(value: Any): Bytes
+
+  /// Render a Pkl document as `pkl-binary`.
+  external function renderDocument(value: Any): Bytes
+}
+----
+
+=== Java API
+
+To support the new Pkl APIs for rendering binary data (`BytesRenderer`) and `pkl-binary` specifically (`VmPklBinaryEncodingRenderer`), the `org.pkl.core.stdlib.AbstractRenderer` class will have all `String`-specific functionality extracted to a new `AbstractStringRenderer` subclass.
+Existing `AbstractRenderer` subclasses in the codebase will subclass `AbstractStringRenderer` instead.
+
+New methods will be added to the `org.pkl.core.Evaluator` interface enabling clients to directly encode evaluation results to `pkl-binary`:
+
+[source,java]
+----
+public interface Evaluator {
+  // ...
+
+  /**
+   * Evaluates the Pkl expression represented as {@code expression}, returning a byte array of the
+   * <code>pkl-binary</code>-encoded representation of the result.
+   *
+   * @throws PklException if an error occurs during evaluation
+   * @throws IllegalStateException if this evaluator has already been closed
+   */
+  byte[] evaluateExpressionPklBinary(ModuleSource moduleSource, String expression);
+
+  // ...
+}
+----
+
+A new class `org.pkl.core.PklBinaryDecoder` will be added to implement decoding of `pkl-binary` data to user-facing (exported) values (`PObject` and friends):
+
+[source,java]
+----
+/**
+ * A decoder/parser for <code>pkl-binary</code>.
+ *
+ * <p>For how pkl-binary turns Java, see {@link Value}.
+ */
+public class PklBinaryDecoder extends AbstractPklBinaryDecoder {
+  /**
+   * Decode a value from the supplied byte array.
+   *
+   * @return the encoded value
+   */
+  public static Object decode(byte[] bytes);
+
+  /**
+   * Decode a value from the supplied {@link InputStream}.
+   *
+   * @return the encoded value
+   */
+  public static Object decode(InputStream inputStream);
+}
+----
+
+NOTE: This proposal opts not to implement a binary encoder that operates on exported value types, i.e. encoding `PObject` and friends to `pkl-binary`.
+This is primarily because exporting runtime values (`Vm*` types) or decoding `pkl-binary` to API values (`P*` types) is a lossy operation.
+Pkl `List`/`Listing` and `Map`/`Mapping` values are exported/decoded to the same Java values (`List` and `Map`, respectively), making round-tripping impossible.
+
+New static methods will be added to `org.pkl.config.java.Config` to adapt binary decoding to link:{uri-docs}/java-binding/pkl-config-java.html#usage[existing Java configuration workflows].
+[source,java]
+----
+var encodedData; // some byte[] or InputStream
+var config = Config.fromPklBinary(encodedData);
+var pigeon = config.get("pigeon");
+var age = pigeon.get("age").as(int.class);
+var diet = pigeon.get("diet").as(JavaType.listOf(String.class));
+----
+
+Extensions will be added in `pkl-config-kotlin` to provide equivalent support for link:{uri-docs}/kotlin-binding/pkl-config-kotlin.html#usage[existing Kotlin configuration workflows].
+[source,kotlin]
+----
+val encodedData // some ByteArray or InputStream
+val config = Config.fromPklBinary(encodedData, ValueMapper.preconfigured().forKotlin())
+val pigeon = config["pigeon"]
+val age = pigeon["age"].to<Int>()
+val hobbies = pigeon["diet"].to<List<String>>()
+----
+
+== Compatibility
+
+These changes are potentially backwards-incompatible:
+
+* Subclasses of `org.pkl.core.stdlib.AbstractRenderer` outside of `pkl-core` will need to switch to extend `AbstractStringRenderer`.
+* Handling of superfluous slots in fixed-length structures in `pkl-binary` may impact language binding library implementations.
+** link:https://github.com/apple/pkl-go/pull/167[Fixed in pkl-go], to be released as part of v0.12.0.
+** pkl-swift already handles this cleanly.
+* The `pkl-binary` encoding now uses two additional (three total) slots for the `Class` and `TypeAlias` types.
+** Libraries should support the prior one-slot encoding gracefully to remain compatible with older Pkl releases.
+
+== Future directions
+
+=== In-language `pkl-binary` Decoding
+
+This SPICE originally proposed an in-language `pklbinary.Parser` class that would reconstitute rendered `pkl-binary` data to in-language types.
+This was removed from this iteration of the proposal due to concerns about how to handle module imports.
+One of Pkl's principals is that the import graph must be able to be calculated and analyzed statically.
+This means that all modules (potentially) used in encoded `pkl-binary` data must be static during parse time or defined by the calling code.
+
+There are two main implementation paths considered:
+
+* **In-language API**:
+This would require callers to pass in an already-imported set of modules from which to resolve `Typed`, `Class`, and `TypeAlias` values during parsing.
+There are usability concerns with this approach that may make it impractical for real-world usage.
+* **Language Construct**:
+Much like import expressions, this could only permit string literals for the URI to load, which severely limits flexibility of the feature.
+While this would enable statically determining imports at parse time, it also prevents callers from computing URIs.
+
+We've determined that we need more information on potential use cases before pursuing this feature further.
+
+=== Binary Format Evolution
+
+This proposal explicitly avoids proposing a versioning mechanism for the `pkl-binary` encoding in favor of formalizing forward compatibility for a subset of changes (adding fields to fixed-size structures).
+In the future, it may be necessary to make changes that do not fall into this category and are truly backwards-incompatible.
+This implies that some notion of protocol versioning may be necessary eventually.
+There are a few approaches were considered as part of this proposal:
+
+* Out-of-band version indication - Indicate the protocol version in a structure outside the actual encoded byte stream (possibly via a field in the message passing API or a file extension).
+* In-band binary header - Indicate the protocol version with a fixed-sized link:https://en.wikipedia.org/wiki/File_format#Magic_number[magic number] such as `PKL<UInt8>` where the integer is the protocol version.
+** Implementers would check encoded data for this header and choose an appropriate decoder implementation, falling back to the current "version zero" implementation if the header is not present.
+* In-band msgpack data - Indicate the protocol version as encoded msgpack data. Using a {uri-messagepack-ext}[msgpack extension] may make sense as a way to do this.
+** Similarly to the binary header, implementers would fall back to the current implementation when no version information is present.
+
+All of these mechanisms would require support in language binding libraries and other consumers of `pkl-binary` data.
+In the case of each, this would render older libraries (or Pkl versions) unable to decode `pkl-binary` data encoded by newer Pkl versions, but should allow consumers to still decode data encoded by older Pkl versions.
