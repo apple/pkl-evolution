@@ -26,7 +26,7 @@ A Java API will also be provided.
 
 == Detailed design
 
-The formatter won't allow any form of customization, similarly to https://pkg.go.dev/cmd/gofmt[gofmt].
+The formatter will allow very few forms of customization, similarly to https://pkg.go.dev/cmd/gofmt[gofmt].
 The idea is that there is a single canonical set of rules to format Pkl code. If people want to format their Pkl
 code differently, they can use other tools that allow customization.
 
@@ -46,36 +46,49 @@ The CLI commands will receive Pkl files as inputs and either check or format the
 
 [source,shell]
 ----
-pkl format check <paths>
+$ pkl format -h
+Usage: pkl format [<options>] [<paths>]...
 
-  Check if the given files are properly formatted, printing the file name to stdout in case they are not. Returns non-zero in case of failure.
-----
+  Format or check formatting of Pkl files.
 
-[source,shell]
-----
-pkl format apply <paths>
+  Examples:
 
-  Overwrite all the files in place with the formatted version.
+  ╭─────────────────────────────────────────────────────────────────────────────────────────╮
+  │# Overwrite all Pkl files inside `my/folder/`, recursively.                              │
+  │$ pkl format -w my/folder/                                                               │
+  │                                                                                         │
+  │# Check formatting of all files, printing filenames with formatting violations to stdout.│
+  │# Exit with exit code `11` if formatting violations were found.                          │
+  │$ pkl format --diff-name-only my/folder/                                                 │
+  │                                                                                         │
+  │# Format Pkl code from stdin.                                                            │
+  │$ echo "foo = 1" | pkl format -                                                          │
+  ╰─────────────────────────────────────────────────────────────────────────────────────────╯
 
 Options:
-  -s, --silent  Do not write the name of the files that failed formatting to stdout.
+  --grammar-version=(1|2)  The grammar compatibility version to use.
+                           1: 0.25 - 0.29
+                           2: 0.30+ (default)
+  -w, --write              Format files in place, overwriting them. Implies ---diff-name-only.
+  --diff-name-only         Write the path of files with formatting violations to stdout.
+  -s, --silent             Don't write to stdout or stderr. Mutually exclusive with --diff-name-only.
+  -h, --help               Show this message and exit
+
+Arguments:
+  <paths>  Files or directory to check. Use - to read from stdin.
 ----
 
 === Java API
 
 The Java API will provide a way to use the formatter programmatically from any JVM language.
 
-[source, java]
+[source, kotlin]
 ----
-public class PklFormatter {
-  // Check the given file for formatting violations and return
-  // a possible diff of said violations
-  public @Nullable String check(Path path) {}
-  public @Nullable String check(String code) {}
-
-  // Returns a formatted version of the given file
-  public String format(Path path) {}
-  public String format(String code) {}
+class Formatter {
+  /** Formats a Pkl file from the given file path. */
+  fun format(path: Path, grammarVersion: GrammarVersion): String
+  
+  fun format(text: String, grammarVersion: GrammarVersion): String
 }
 ----
 
@@ -163,6 +176,7 @@ A space must be added
 - Before and after braces
 - Before and after an equals sign
 - Before and after an arrow (`->`)
+- Before and after a union pipe (`|`)
 - Before a line or block comment start (`//`, `/*`)
 - Before a block comment end (`*/`)
 - Around infix operators
@@ -178,7 +192,6 @@ There must be no empty spaces
 - Before a colon
 - Before a subscript (`[]`)
 - Before a `?` in a nullable type
-- Before and after a pipe
 - After a function name
 - After a `*` in a default type
 - Between a type and its constraints and type parameters
@@ -198,7 +211,7 @@ baz = (x)->x
 
 function fun ( x:Int ? ,b  :Boolean )= if(b)/*return x*/x else x+bar [0 ]
 
-choices: "foo" | * "bar" | String
+choices: "foo"|* "bar"|String
 ----
 
 .output
@@ -214,7 +227,7 @@ baz = (x) -> x
 
 function fun(x: Int?, b: Boolean) = if (b) /* return x */ x else x + bar[0]
 
-choices: "foo"|*"bar"|String
+choices: "foo" | *"bar" | String
 ----
 
 ==== [0004] Line breaks
@@ -232,7 +245,7 @@ Parameters, type parameters, and method arguments that don't fit a single line m
 in separate lines with a trailing comma.
 
 Function headers (everything before the type or normal parameters begin) must not break lines. +
-Property and typealiases headers must not break lines.
+Module declarations, property and typealiases headers must not break lines.
 
 .input
 [source, pkl]
@@ -287,7 +300,7 @@ local function function2(
   parameter1: Parameter1Type,
   parameter2: Parameter2Type,
   parameter3: Parameter3Type,
-  parameter4: Parameter4Type
+  parameter4: Parameter4Type,
 ): String = ""
 
 prop =
@@ -295,10 +308,10 @@ prop =
     loooooooooooooooooogParameter1,
     loooooooooooooooooogParameter2,
     loooooooooooooooooogParameter3,
-    loooooooooooooooooogParameter4
+    loooooooooooooooooogParameter4,
   )
 
-prop2: String|Int|Boolean
+prop2: String | Int | Boolean
 ----
 
 .lineBreakInput
@@ -329,10 +342,7 @@ bar: Boolean|Mapping<LooooooooooooooooooooooooongTypeName, AnotherLooooooooooooo
 .lineBreakOutput
 [source, pkl]
 ----
-module
-  reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly
-    .loooooooooooooooooooooooooooooooog
-    .naaaaaaaaaaaaaaaaaaaaaaaaaame
+module reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly.loooooooooooooooooooooooooooooooog.naaaaaaaaaaaaaaaaaaaaaaaaaame
 
 extends
   "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
@@ -341,45 +351,35 @@ import
   "reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongModule.pkl"
   as foo
 
-local open
-class LoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooongName {}
+local open class LoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooongName {}
 
-local open
-class
-  ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongName
-  {}
+local open class ReaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaalyLongName {}
 
-const hidden
-loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName = 99
+const hidden loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName =
+  99
 
-const hidden
-reallyLoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName
+const hidden reallyLoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName
   = 99
 
-const local
-function looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
+const local function looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
   x: Int,
   y
 ) = x + y
 
-const local
-function
-  reallyLooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
+local const function reallyLooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooogName(
   x: Int,
-  y
+  y,
 ) = x + y
 
 typealias Foo =
   LooooooooooooooooooooooooongTypeName
-  |AnotherLooooooooooooooooooooooooongTypeName
-  |OtherLooooooooooooooooooooooooongTypeName
+    | AnotherLooooooooooooooooooooooooongTypeName
+    | OtherLooooooooooooooooooooooooongTypeName
 
-bar:
-  Boolean
-  |Mapping<
-    LooooooooooooooooooooooooongTypeName,
-    AnotherLooooooooooooooooooooooooongTypeName
-  >(loooooooooooooooooooogConstraint)
+bar: Boolean
+  | Mapping<LooooooooooooooooooooooooongTypeName, AnotherLooooooooooooooooooooooooongTypeName>(
+    loooooooooooooooooooogConstraint,
+  )
 ----
 
 ==== [0005] Module definitions
@@ -621,7 +621,7 @@ qux = new Dynamic { 1; 2; 3; prop="prop"; [0] = 9 }
 
 If the expression is a `new`, amending, or literal function expression it should start in the same line as the `=`. +
 In multiline contexts, operators must be written in the next line, except minus (`-`). +
-The same operators will be flattened together and only indented once.
+Operators will be ordered by precedence.
 
 .input
 [source, pkl]
@@ -646,7 +646,9 @@ new Listing {
 [source, pkl]
 ----
 foo {
-  123123123123 + 123123123123 * 123123123123 - 123123123123 / 123123123123
+  123123123123
+    + 123123123123 * 123123123123 -
+    123123123123 / 123123123123
     + 123123123123 ** 123123123123
   2
   3
@@ -694,13 +696,12 @@ foo { a, b, c ->
 An `if` that spans multiple lines must have the then and else clauses indented. +
 Both clauses must be in their own line. +
 If the else clause is followed by another `if`, it must not be indented and start in the same line as the `else`. +
-An `if` will be written in a single line if it fits. +
+An `if` will be written in a single line if it fits unless it was originally multiline. +
 
 .input
 [source, pkl]
 ----
-foo = if (predicate) 0
-  else 1
+foo = if (predicate) 0 else 1
 
 bar =
   if (isItTooBigToFitInASingleLine) spanTheExpressionOverMultipleLines
@@ -742,13 +743,12 @@ The expression following the let must be indented if it doesn't fit a single lin
 A let followed by another let must not be indented. +
 If the binding expression spans multiple lines, the opening and closing parentheses
 must be on their own line and the whole binding must be indented.
+If the let was originally multiline, it will be kept multiline.
 
 .input
 [source, pkl]
 ----
-foo =
-  let (x = 1)
-    x
+foo = let (x = 1)x
 
 bar =
   let (x = 1)
@@ -808,7 +808,7 @@ bar = 1
 baz = 1
 
 /// the line bellow cannot have trailling whitespaces
-///
+///  
 /// line2
 qux = 1
 ----
@@ -854,7 +854,8 @@ bar = 1 + /* block comment */
 foo = 1 // reaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaly long comment
 
 bar =
-  1 + /* block comment */
+  1
+    + /* block comment */
     1
 ----
 
