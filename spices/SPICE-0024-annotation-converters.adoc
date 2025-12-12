@@ -1,0 +1,405 @@
+:uri-package-docs: https://pkl-lang.org/package-docs
+:uri-bindings-specification: {uri-docs}/bindings-specification/binary-encoding.html
+:uri-stdlib-baseModule: {uri-package-docs}/pkl/current/base
+:uri-stdlib-Annotation: {uri-stdlib-baseModule}/Annotation
+:uri-stdlib-BaseValueRenderer: {uri-stdlib-baseModule}/BaseValueRenderer
+:uri-stdlib-Typed: {uri-stdlib-baseModule}/Typed
+:uri-stdlib-Pair: {uri-stdlib-baseModule}/Pair
+
+= Annotation converters
+
+* Proposal: link:./SPICE-0024-annotation-converters.adoc[SPICE-0024]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.31
+* Category: Language, Standard Library
+
+== Introduction
+
+This proposal introduces a mechanisms to use link:{uri-stdlib-Annotation}[`Annotations`] in link:{uri-stdlib-BaseValueRenderer}[value renderers] to declaratively transform property names and values of link:{uri-stdlib-Typed}[`Typed`] objects during rendering
+
+== Motivation
+
+Today, Pkl's renderers (subclasses of link:{uri-stdlib-BaseValueRenderer}[`BaseValueRenderer`]) offer link:{uri-stdlib-BaseValueRenderer}#converters[`converters`] to transform values during rendering based on their class or "path" through the rendered value.
+This functionality is fairly flexible, but there are some use cases that remain difficult or impossible to achieve:
+
+* *Transforming property names* is possible, but only by using a converter on the surrounding value, converting it to a `Map`, and transforming entries.
++
+[source,pkl]
+----
+class Bird {
+  birdName: String
+}
+
+output {
+  renderer {
+    converters {
+      // replace "birdName" with "bird_name"
+      [Bird] = (it) ->
+        it
+          .toMap()
+          .mapKeys((name) ->
+            name.replaceAllMapped(Regex("([a-z0-9])([A-Z])"), (match) ->
+              "\(match.groups[1].value)_\(match.groups[2].value.toLowerCase())"
+            )
+          )
+    }
+  }
+}
+----
+* *Converting the same type in different ways* is possible in some cases using path-based converters or by converting containing classes.
+Both of these approaches separate the presentation from the definition, making the code more difficult to understand and maintain.
++
+[source,pkl]
+----
+clientConfig: ClientConfig
+
+serverConfig: ServerConfig
+
+class ClientConfig {
+  timeoutS: Duration // render as seconds
+}
+
+class ServerConfig {
+  readTimeoutS: Duration // render as seconds
+  readHeaderTimeoutMS: Duration // render as milliseconds
+  children: Listing<ServerConfig>
+}
+
+output {
+  renderer {
+    converters {
+      ["clientConfig.timeoutS"] = (it) -> it.timeoutS.toUnit("s").value
+      ["serverConfig.readTimeoutS"] = (it) -> it.readTimeoutS.toUnit("s").value
+      ["serverConfig.readHeaderTimeoutMS"] = (it) -> it.readHeaderTimeoutMS.toUnit("ms").value
+      // these are a bit inexact:
+      ["children[*].readTimeoutS"] = this["serverConfig.readTimeoutS"]
+      ["children[*].readHeaderTimeoutMS"] = this["serverConfig.readHeaderTimeoutMS"]
+
+      // OR
+
+      [ClientConfig] = (it) -> it.toMap().put("timeoutS", it.timeoutS.toUnit("s").value)
+      [ServerConfig] = (it) ->
+        it
+          .toMap()
+          .put("readTimeoutS", it.readTimeoutS.toUnit("s").value)
+          .put("readHeaderTimeoutMS", it.readHeaderTimeoutMS.toUnit("ms").value)
+    }
+  }
+}
+----
+* *Validating properties in nested structures* is only possible to achieve with copious boilerplate and usability impact.
++
+[source,pkl]
+----
+softwareVersion: Int = 1
+
+addedInV1: String(softwareVersion >= 1)?
+
+addedInV2: String(softwareVersion >= 2)?
+
+hidden nestedConfig: NestedConfig
+
+fixed effectiveNestedConfig: NestedConfig = (nestedConfig) {
+  softwareVersion = module.softwareVersion
+}
+
+class NestedConfig {
+  hidden softwareVersion: Int
+
+  requiredProperty: String
+
+  addedInV1: String(softwareVersion >= 1)?
+
+  addedInV2: String(softwareVersion >= 2)?
+
+  hidden children: Listing<NestedConfig>
+
+  local self = this
+  fixed effectiveChildren: Listing<NestedConfig> = (children) {
+    [[true]] {
+      softwareVersion = self.softwareVersion
+    }
+  }
+}
+----
+
+== Proposed Solution
+
+To better serve this use case, we propose adding a new type of converter based on property annotations alongside the existing class- and path-based converters.
+
+== Detailed design
+
+=== Pkl API
+
+A new `annotationConverters` property will be added to link:{uri-stdlib-BaseValueRenderer}[`BaseValueRenderer`].
+
+Annotation converters to apply before values are rendered.
+
+Annotation converters are checked for each property of rendered `Typed` values.
+If a property has an annotation for which a converter is defined, the converter function is called with the property name, the value of the annotation, and the property value.
+The converter function must return a `Pair` of the converted property name and value.
+
+Each of the property annotations of the enclosing class is checked in order, starting with the annotations (top to bottom) of the current class, then repeating for each parent class in the hierarchy.
+Multiple annotation converters can apply; converters for matching annotations are called in order, with the result of one being passed to the next.
+
+At most one converter is applied per annotation. The most specific class (according to class hierarchy) wins.
+
+Annotation converters can overlap with link:{uri-stdlib-BaseValueRenderer}#converters[`converters`] and apply first.
+
+[source,pkl]
+----
+abstract class BaseValueRenderer {
+  // ...
+
+  annotationConverters: Mapping<Class, (String, unknown, unknown) -> Pair<String, Any>>
+
+  // ...
+}
+----
+
+=== Usage Examples
+
+The same scenarios above become simple to implement and maintain with annotation converters:
+
+* *Transforming property names*
++
+[source,pkl]
+----
+class SnakeCase extends Annotation {
+  function transform(value: String): String =
+    value.replaceAllMapped(Regex("([a-z0-9])([A-Z])"), (match) ->
+      "\(match.groups[1].value)_\(match.groups[2].value.toLowerCase())"
+    )
+}
+
+class Bird {
+  @SnakeCase
+  birdName: String
+}
+
+output {
+  renderer {
+    annotationConverters {
+      [SnakeCase] = (propertyName, annotation, value) ->
+        Pair(annotation.transform(propertyName), value)
+    }
+  }
+}
+----
+* *Converting the same type in different ways*
++
+[source,pkl]
+----
+clientConfig: ClientConfig
+
+serverConfig: ServerConfig
+
+class ClientConfig {
+  @RenderDuration { unit = "s" }
+  timeoutS: Duration
+}
+
+class ServerConfig {
+  @RenderDuration { unit = "s" }
+  readTimeoutS: Duration
+  @RenderDuration { unit = "ms" }
+  readHeaderTimeoutMS: Duration
+  children: Listing<ServerConfig>
+}
+
+class RenderDuration {
+  unit: DurationUnit
+
+  function transform(value: Duration): Number = value.toUnit(unit).value
+}
+
+output {
+  renderer {
+    annotationConverters {
+      [RenderDuration] = (propertyName, annotation, value) ->
+        Pair(propertyName, annotation.transform(value))
+    }
+  }
+}
+----
+* *Validating properties in nested structures*
++
+[source,pkl]
+----
+softwareVersion: Int = 2
+
+@Available { since = 2 }
+addedInV2: String?
+
+@Available { since = 3 }
+addedInV3: String?
+
+@Available { until = 2 }
+removedInV3: String?
+
+@Available { since = 2; until = 2 }
+presentInV2Only: String?
+
+nestedConfig: NestedConfig
+
+class NestedConfig {
+  requiredProperty: String
+
+  @Available { since = 2 }
+  addedInV2: String?
+
+  children: Listing<NestedConfig>
+}
+
+class Available extends Annotation {
+  since: Int?
+  until: Int?
+
+  function validate(target: Int, value: Any): Any =
+    if (value == null)
+      null
+    else if (since != null && target < since)
+      throw("Target version \(target) is lower than minimum version \(since)")
+    else if (until != null && until < target)
+      throw("Target version \(target) is higher than maximum version \(until)")
+    else
+      value
+}
+
+output {
+  renderer {
+    annotationConverters {
+      [Available] = (propertyName, annotation, value) ->
+        Pair(propertyName, annotation.validate(softwareVersion, value))
+    }
+  }
+}
+----
+
+=== Language Binding Libraries
+
+While annotation converters do not directly affect Pkl's language bindings, it is worth highlighting how they _can_ interact.
+The "Validating properties in nested structures" example above shows how annotation converters may be used for validations that need data "injected" from the top-level module being rendered.
+Most usage of Pkl's language bindings bypass renderers (and therefore converters of all kinds) entirely, which would skip such validation.
+
+Clients of Pkl's language bindings can change how they evaluate modules to take advantage of annotation converters.
+This is done by combining a small amount of Pkl module code with some changes on the client side.
+
+In Pkl, set up the link:{uri-bindings-specification}[`pkl-binary`] renderer:
+
+[source,pkl]
+----
+import "pkl:pklbinary"
+
+output {
+  renderer = new pklbinary.Renderer {
+    annotationConverters {
+    // Add validating converters here!
+    }
+  }
+}
+----
+
+In the client code, update how modules are evaluated:
+
+|===
+|Language |Old invocation |New invocation
+
+|Java/Kotlin
+|`ConfigEvaluator.evaluate(moduleSource)`
+|`Evaluator.evaluateOutputBytes(moduleSource)`
+
+`Config.fromPklBinary(bytes)`
+
+|Go
+|`Evaluator.EvaluateModule(ctx, moduleSource, &out)`
+|`Evaluator.EvaluateOutputBytes(ctx, moduleSource)`
+
+`pkl.Unmarshal(buf)`
+
+|Swift
+|`Evaluator.evaluateModule(moduleSource, T.self)`
+|`Evaluator.evaluateOutputBytes(moduleSource)`
+
+`PklDecoder.decode(T.self, from: bytes)`
+
+|===
+
+== Compatibility
+
+This is a purely additive change.
+Modules that adopt annotation converters will not be compatible with prior versions of Pkl.
+
+== Future directions
+
+=== Built-in annotations for built-in renderers
+
+One possible extension to annotation converters might be built-in annotations for specific renderers.
+These annotation converters could be configured by default on their respective renderers, allowing per-format customization for simple cases without needing to configure any converters directly:
+
+[source,pkl]
+----
+// fmt.pkl
+import "pkl:json"
+import "pkl:yaml"
+
+@json.Property { name = "foo_bar" }
+@yaml.Property { name = "foo-bar" }
+fooBar: String = "hello world"
+----
+
+[source,terminaloutput]
+----
+$ pkl eval fmt.pkl -f json
+{
+  "foo_bar": "hello world"
+}
+
+$ pkl eval fmt.pkl -f yaml
+foo-bar: hello world
+----
+
+== Alternatives considered
+
+=== Reusing `BaseValueRenderer#converters`
+
+The first iteration of this design opted for reusing the existing `converters` property instead of adding the `annotationConverters` property:
+
+[source,pkl]
+----
+abstract class BaseValueRenderer {
+  // ...
+
+  converters: Mapping<
+    Class | String,
+    (unknown) -> Any | (String, unknown, unknown) -> Pair<String, Any>,
+  >
+
+  // ...
+}
+----
+
+The runtime could identify which converters apply to annotations vs. classes by checking the number of arguments for the supplied function.
+For functions with 3 arguments the class would be validated to ensure it is a subclass of `Annotation`.
+
+The disadvantage of this approach is that it becomes impossible to define both a class-based and annotation-based converter for the same `Annotation` subclass.
+While this unlikely to be an issue in practice, the design as proposed both avoids this limitation and involves less implicit behavior that users would need to track.
+
+=== Special `Annotation` subclass for converting
+
+Instead of explicitly configuring converters that act on annotations, a new subclass of `Annotation` could be introduced that is implicitly treated as a converter:
+
+[source,pkl]
+----
+abstract class ConverterAnnotation extends Annotation {
+  function convert(propertyName: String, value: Any): Pair<String, Any>
+}
+----
+
+When rendered, the `convert` method of `ConverterAnnotation` subclasses would be called implicitly.
+
+This approach is both more implicit and less capable than the proposed implementation.
+There would be no way to only enable specific converter annotations or enable different converters for different renderers.
+
+Even if this approach were expanded to require explicitly listing the `ConverterAnnotation` classes to enable, it would still not be possible to inject module-level data like the validation use case outlined above.
