@@ -102,11 +102,11 @@ A new `annotationConverters` property will be added to link:{uri-stdlib-BaseValu
 Annotation converters to apply before values are rendered.
 
 Annotation converters are checked for each property of rendered `Typed` values.
-If a property has an annotation for which a converter is defined, the converter function is called with the property name, the value of the annotation, and the property value.
+If a property has an annotation for which a converter is defined, the converter function is called with the value of the annotation, the property name, and the property value.
 The converter function must return a `Pair` of the converted property name and value.
 
 Each of the property annotations of the enclosing class is checked in order, starting with the annotations (top to bottom) of the current class, then repeating for each parent class in the hierarchy.
-Multiple annotation converters can apply; converters for matching annotations are called in order, with the result of one being passed to the next.
+Multiple annotation converters can apply per property; converters for matching annotations are called in order, with the result of one being passed to the next.
 
 At most one converter is applied per annotation. The most specific class (according to class hierarchy) wins.
 
@@ -117,11 +117,59 @@ Annotation converters can overlap with link:{uri-stdlib-BaseValueRenderer}#conve
 abstract class BaseValueRenderer {
   // ...
 
-  annotationConverters: Mapping<Class, (String, Annotation, unknown) -> Pair<String, Any>>
+  annotationConverters: Mapping<Class, (Annotation, String, unknown) -> Pair<String, Any>>
 
   // ...
 }
 ----
+
+==== Implicit converters for built-in renderers
+
+It's often desirable to transform property names (see "Transforming property names" above) differently for different rendered formats.
+For example, a property may be named with `snake_case` when rendered to JSON and `kebab-case` when rendered to YAML.
+
+New APIs for per-format property renaming will be added for each built-in renderer that has a corresponding module:
+
+|===
+|Renderer Type |Property Annotation Type
+
+|`base.JsonRenderer` |`json.Property`
+|`base.YamlRenderer` |`yaml.Property`
+|`jsonnet.Renderer`  |`jsonnet.Property`
+|`protobuf.Renderer` |`protobuf.Property`
+|`xml.Renderer`      |`xml.Property`
+
+|===
+
+Usage example:
+
+[source,pkl]
+----
+// fmt.pkl
+import "pkl:json"
+import "pkl:yaml"
+
+@json.Property { name = "foo_bar" }
+@yaml.Property { name = "foo-bar" }
+fooBar: String = "hello world"
+----
+
+[source,terminaloutput]
+----
+$ pkl eval fmt.pkl -f json
+{
+  "foo_bar": "hello world"
+}
+
+$ pkl eval fmt.pkl -f yaml
+foo-bar: hello world
+----
+
+Each renderer will implicitly add its corresponding `<format>.Property` annotation as an annotation converter.
+Manually defining an annotation converter for one of these annotation types would override the renderer's default behavior for the annotation.
+
+Renderers in `pkl:base` without a corresponding module (`PcfRenderer`, `PropertiesRenderer`, and `PlistRenderer`) will not receive corresponding annotations at this time.
+A corresponding annotation for `pklbinary.Renderer` is also omitted; the `pkl-binary` format is not intended to deviate from the native Pkl representation of `Typed` values, which is antithetical to property renaming.
 
 === Usage Examples
 
@@ -146,8 +194,7 @@ class Bird {
 output {
   renderer {
     annotationConverters {
-      [SnakeCase] = (propertyName, annotation, value) ->
-        Pair(annotation.transform(propertyName), value)
+      [SnakeCase] = (name, annotation, value) -> Pair(annotation.transform(name), value)
     }
   }
 }
@@ -173,7 +220,7 @@ class ServerConfig {
   children: Listing<ServerConfig>
 }
 
-class RenderDuration {
+class RenderDuration extends Annotation {
   unit: DurationUnit
 
   function transform(value: Duration): Number = value.toUnit(unit).value
@@ -182,8 +229,7 @@ class RenderDuration {
 output {
   renderer {
     annotationConverters {
-      [RenderDuration] = (propertyName, annotation, value) ->
-        Pair(propertyName, annotation.transform(value))
+      [RenderDuration] = (annotation, name, value) -> Pair(name, annotation.transform(value))
     }
   }
 }
@@ -209,35 +255,6 @@ While it's possible to work around this use the xref:SPICE-0021-binary-renderer-
 
 This sort of validation is something the team is interested in ergonomic support for, but is not a use case well-served by this proposal.
 
-== Future directions
-
-=== Built-in annotations for built-in renderers
-
-One possible extension to annotation converters might be built-in annotations for specific renderers.
-These annotation converters could be configured by default on their respective renderers, allowing per-format customization for simple cases without needing to configure any converters directly:
-
-[source,pkl]
-----
-// fmt.pkl
-import "pkl:json"
-import "pkl:yaml"
-
-@json.Property { name = "foo_bar" }
-@yaml.Property { name = "foo-bar" }
-fooBar: String = "hello world"
-----
-
-[source,terminaloutput]
-----
-$ pkl eval fmt.pkl -f json
-{
-  "foo_bar": "hello world"
-}
-
-$ pkl eval fmt.pkl -f yaml
-foo-bar: hello world
-----
-
 == Alternatives considered
 
 === Reusing `BaseValueRenderer#converters`
@@ -251,7 +268,7 @@ abstract class BaseValueRenderer {
 
   converters: Mapping<
     Class | String,
-    (unknown) -> Any | (String, unknown, unknown) -> Pair<String, Any>,
+    (unknown) -> Any | (Annotation, String, unknown) -> Pair<String, Any>,
   >
 
   // ...
@@ -266,18 +283,43 @@ While this unlikely to be an issue in practice, the design as proposed both avoi
 
 === Special `Annotation` subclass for converting
 
-Instead of explicitly configuring converters that act on annotations, a new subclass of `Annotation` could be introduced that is implicitly treated as a converter:
+A new subclass of `Annotation` could be introduced to make working with annotation converters more convenient.
 
 [source,pkl]
 ----
 abstract class ConverterAnnotation extends Annotation {
-  function convert(propertyName: String, value: Any): Pair<String, Any>
+  function convert(propertyName: String, value: Any): Pair<String, Any> =
+    Pair(convertKey(propertyName), convertValue(value))
+
+  function convertKey(propertyName: String): String = propertyName
+
+  function convertValue(value: Any): Any = value
 }
 ----
 
-When rendered, the `convert` method of `ConverterAnnotation` subclasses would be called implicitly.
+There are two ways this class might be used:
+
+==== Implicit
+
+Instead of or in addition to explicitly configuring converters that act on annotations, `ConverterAnnotation` could be implicitly treated as a converter:
+When rendered, the `convert` method of `ConverterAnnotation` subclasses would be called.
 
 This approach is both more implicit and less capable than the proposed implementation.
 There would be no way to only enable specific converter annotations or enable different converters for different renderers.
 
-Even if this approach were expanded to require explicitly listing the `ConverterAnnotation` classes to enable, it would still not be possible to inject module-level data like the validation use case outlined above.
+Even if this approach were expanded to require explicitly listing the `ConverterAnnotation` classes to enable, it would still not be possible to inject module-level data to influence the converter's behavior.
+
+==== Explicit
+
+The `AnnotationConverter` class would be provided as a convenience for implementing annotation converters, especially those that just transform property keys or values, not both.
+The converter would still need to be explicitly configured on the renderer:
+
+[source,pkl]
+----
+annotationConverters {
+  [SomeAnnotationConverter] = (annotation, name, value) -> annotation.convert(name, value)
+}
+----
+
+This adds an identifier to `pkl:base` and would be a breaking change to code using the identifier `AnnotationConverter`.
+There is no reason this must be in the standard library; users or libraries making use of annotation converters could define this same class or similar in their own code as-needed.
