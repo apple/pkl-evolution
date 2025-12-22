@@ -1,0 +1,476 @@
+= `pkl run` CLI framework
+
+* Proposal: link:./SPICE-0025-pkl-run-cli-framework.adoc[SPICE-0025]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.31
+* Category: CLI, Standard Library
+
+== Introduction
+
+This SPICE proposes a framework for implementing full-featured CLI tools in Pkl.
+
+== Motivation
+
+It is possible to implement simple CLI tools using Pkl today.
+Running such a tool looks like this:
+
+[source,shell]
+----
+$ pkl eval my-tool.pkl -p requiredArg=foo -p optionalArg=bar -p listArg=a,b,c
+----
+
+This approach has a few major drawbacks:
+
+* Arguments are passed using external properties or environment variables, eschewing established CLI conventions.
+* Modern CLI features like generated `--help` and shell completion are not possible.
+* Parsing and validation for non-`String` arguments must be done manually.
+* There is no support for tools with hierarchical (sub)command structures.
+* It is not readily possible to run a Pkl tool that imports a module supplied by the user on the command line.
+
+== Proposed Solution
+
+A new standard library `pkl:Command` will be provided.
+This module will be extended to declaratively define commands, subcommands, flags, arguments, and outputs.
+
+A new CLI command `pkl run` will be added to evaluate commands.
+
+== Detailed design
+
+=== Running commands
+
+Command line tools written in Pkl are executed using the `pkl run` command:
+
+[source,bash]
+----
+pkl run [<options for pkl run>] <root command module> [<options for specified command>]
+----
+
+Arguments that influence Pkl evaluation `--root-dir`, `--trace-mode`, etc.) must precede the command module's URI.
+This avoids ambiguity between built-in and command-provided options.
+Without this disambiguation, adding new CLI options to Pkl would be a breaking change for command modules.
+
+Standalone scripts may be implemented on compatible platforms:
+
+.my-tool.pkl
+[source,pkl]
+----
+#!/usr/bin/env -S pkl run
+extends "pkl:Command"
+// ...
+----
+
+If this file is marked executable (`chmod +x`), it can be executed directly like a shell script:
+
+[source,terminaloutput]
+----
+./my-tool.pkl [<options>]
+----
+
+When used as a standalone script, shell completions for supported shells can be generated:
+
+[source,terminaloutput]
+----
+./my-tool.pkl shell-completion <shell>
+----
+
+=== Defining commands
+
+The core `pkl:Command` API for defining command structure and options has a small surface area:
+
+[source,pkl]
+----
+abstract module pkl.Command
+
+/// Command configuration.
+hidden command: CommandInfo
+
+/// Command line options.
+///
+/// Set by the runtime during command execution.
+/// Must not be amended or overridden.
+///
+/// Command modules should override this property and provide their own options type.
+/// The properties of the specified type declare the command line flags and arguments accepted by
+/// the command.
+hidden options: BaseOptions
+
+open class BaseOptions // <1>
+
+class CommandInfo {
+  /// The name of the subcommand.
+  ///
+  /// Default value: the name of the module or class extending [Command].
+  name: String
+
+  /// A long description of the command.
+  ///
+  /// Shown in the CLI help for this command.
+  ///
+  /// Default value: the doc comment of the module or class extending [Command].
+  description: String?
+
+  /// Hide this command from CLI help.
+  hide: Boolean = false
+
+  /// If this command is executed, return an error and print CLI usage.
+  ///
+  /// Only applicable to commands with [subcommands].
+  ///
+  /// This is enabled by default when this command has [subcommands].
+  /// Overriding it to `false` will allow this command to be executed directly.
+  noOp: Boolean(implies(!subcommands.isEmpty)) = !subcommands.isEmpty
+
+  /// Child commands.
+  ///
+  /// Must have unique [name] values.
+  subcommands: *Listing<Command> | Mapping<String, Command> // <2>
+}
+----
+<1> `BaseOptions` is an empty class; commands provide their own class to define accepted flags/arguments.
+<2> Subcommands may be provided as a `Listing` (eg. several `import(...)` expressions) or a `Mapping` (eg. an `import*(...)` expression).
+
+Command implementers extend this module and override the type of the `options` property:
+
+[source,pkl]
+----
+extends "pkl:Command"
+
+options: Options
+
+class Options extends BaseOptions {
+  // define command options here...
+}
+----
+
+NOTE: It is recommended that the class used for `options` in a command extend `pkl.Command#BaseOptions`.
+This is not strictly required, but avoids breakage in the future if/when Pkl enforces that overridden properties are subtypes of their parent.
+
+Commands can return a failure using throw (exit code 1), but otherwise may not control the exit code.
+
+Commands may set `output.text`/`output.bytes` and/or `output.files`.
+Unlike `pkl eval`, both outputs (stdout and files) are processed for all commands, so commands may write files and generate output.
+Additionally, keys in `output.files` are not "sandboxed" by `--multiple-file-output-path`.
+Instead, file entries with absolute paths are written to the specified path and entries with relative path are written relative to the current working directory (or `--working-dir` if specified).
+
+IMPORTANT: Users of `pkl run` must be aware of the security implications of this behavior.
+Command line tools implemented in Pkl will be able to write or overwrite any file that the user has permissions to modify.
+This matches the behavior of command line tools written in any other language.
+
+Beyond writing to files (via `output.files`) and the standard output (via `output.text` or `output.bytes`), commands may not trigger side effects not already available in Pkl.
+This SPICE proposes no facility for making arbitrary HTTP requests (i.e. non-`GET` methods or setting headers) or for executing other programs.
+If additional functionality is desired, https://pkl-lang.org/main/current/language-reference/index.html#external-readers[external readers] may be used to extends Pkl's capabilities.
+
+=== Defining options
+
+Each property of the class of a command's `options` property becomes a command line option.
+A property's doc comment, if present, becomes the corresponding option's CLI help description.
+Properties must have type annotations to determine how they are parsed.
+
+Properties may be annotated with `@Flag` or `@Argument` to influence how they behave:
+
+[source,pkl]
+----
+/// Annotates [options] properties to configure them as named CLI flags.
+class Flag extends Annotation {
+  /// Abbreviated flag name.
+  shortName: Char?
+
+  /// Hide this option from CLI help.
+  hide: Boolean = false
+
+  /// Customize the behavior of turning the raw option value string into the final value.
+  ///
+  /// If a function, the return type must match the annotated property's type.
+  /// If "import", the raw option is treated as an import URI.
+  /// If "import*", the raw option is treated as a glob import URI.
+  parse: (*((String) -> unknown) | "import" | "import*")?
+}
+
+/// Annotates [options] properties to configure them as positional CLI arguments.
+class Argument extends Annotation {
+  /// Customize the behavior of turning the raw option value string into the final value.
+  ///
+  /// If a function, the return type must match the annotated property's type.
+  /// If "import", the raw option is treated as an import URI.
+  /// If "import*", the raw option is treated as a glob import URI.
+  parse: (*((String) -> unknown) | "import" | "import*")?
+}
+----
+
+* Properties annotated with `@Flag` become CLI flags named `--<property name>`.
+* Properties annotated with `@Argument` become positional CLI arguments and are parsed in the order they appear in the class.
+* Properties with no annotation are treated the same as `@Flag` with no further customization.
+
+A property's type determines how it is parsed:
+
+|===
+|Type |Notes
+
+|`String`
+|
+
+|`Char`
+|Behaves like `String` but must be a single character
+
+|`Boolean`
+|True values: `true`, `t`, `1`, `yes`, `y`, `on`
+
+False values: `false`, `f`, `0`, `no`, `n`, `off`
+
+|`Number`
+|Produces an `Int` if the value can be parsed as one, otherwise produces a `Float`
+
+|`Float`
+|
+
+|`Int`
+|
+
+|`Int8`, `Int16`, `Int32`, `UInt`, `UInt8`, `UInt16`, `UInt32`
+|Behaves like `Int` but enforces the type's bounds check
+
+|Union of string literals or a type alias to one
+|Behaves like `String` but only admits specific values.
+
+|`List<Element>`, `Set<Element>`
+|`Element` type must be a primitive type or union of string literals.
+
+Only a single `List` or `Set` positional argument is permitted per command.
+
+|`Map<Key, Value>`
+|`Key` and `Value` types must both be primitive types or unions of string literals.
+
+Only applies to flags; forbidden for positional arguments.
+
+|===
+
+A property with a nullable type is optional and, if not specified on the command line, will have value `null`.
+Type constraints are enforced when the command is executed.
+
+[[custom-option-parsing]]
+==== Custom Option Parsing
+
+A property may be annotated with any type if its `@Flag` or `@Argument` annotation has the `parse` property set.
+The `parse` property overrides how the raw option value is interpreted and may be set a few different ways:
+
+* An anonymous function that accepts the raw string value passed on the command line and returns a value of the property's annotated type.
+* The special value `"import"`, which treats the option's value as a module URI (as if it were passed to `pkl eval`) and sets the option's value to imported contents of the module.
+* The special value `"import*"`, which treats the option's value as a globbed module URI and sets the option's value to a `Mapping` with keys that are the resolved absolute module URIs and values that are the imported module contents. When specifying glob import options, it will often be necessary to quote the value to avoid it being interpreted by the shell.
+
+Parse functions compose with `List<Element>`, `Set<Element>`, and `Map<Key, Value>` option types.
+The parse function is called once for each `List`/`Set` element or `Map` value.
+
+For convenience, pre-built parse functions are provided for the standard library types `Duration` and `DataSize`:
+
+[source,pkl]
+----
+local const quantityRegex = Regex(#"([0-9]+(?:\.[0-9]+)?)\.?([A-Za-z]+)"#)
+
+local const function parseQuantity(value: String, typeName: String): Pair<Float, String> =
+  let (match = quantityRegex.matchEntire(value))
+    if (match == null)
+      throw("Unable to parse \(typeName) from string '\(value)'")
+    else
+      Pair(match.groups[1].value.toFloat(), match.groups[2].value.toLowerCase())
+
+/// A parse function for [Duration] values.
+///
+/// For use with [Flag.parse] and [Argument.parse].
+hidden const parseDuration: (String) -> Duration = (value: String) ->
+  let (quantity = parseQuantity(value, "Duration"))
+  let (_unit = quantity.second)
+  let (unit = if (_unit is DurationUnit) _unit else null)
+    quantity.first.toDuration(unit ?? throw("Unable to parse DurationUnit from '\(_unit)'"))
+
+/// A parse function for [DataSize] values.
+///
+/// For use with [Flag.parse] and [Argument.parse].
+hidden const parseDataSize: (String) -> DataSize = (value: String) ->
+  let (quantity = parseQuantity(value, "DataSize"))
+  let (_unit = quantity.second)
+  let (unit = if (_unit is DataSizeUnit) _unit else null)
+    quantity.first.toDataSize(unit ?? throw("Unable to parse DataSizeUnit from '\(_unit)'"))
+----
+
+=== Subcommands
+
+Like many other command line libraries, `pkl:Command` allows building commands into a hierarchy with a root command and subcommands:
+
+[source,pkl%tested]
+.my-tool.pkl
+----
+extends "pkl:Command"
+
+command {
+  subcommands { // <1>
+    import("subcommand1.pkl")
+    import("subcommand2.pkl")
+  }
+}
+----
+<1> May also be assigned from a glob import, eg. `subcommands = import*("subcommand*.pkl")`
+
+[source,pkl%tested]
+.subcommand1.pkl
+----
+extends "pkl:Command"
+
+import "my-tool.pkl"
+
+parent: `my-tool` // <1>
+
+// Regular module code...
+----
+<1> Optional; asserts that this is a subcommand of `my-tool` and simplifies accessing properties and options of the parent command
+
+=== Testing commands
+
+Command modules are normal Pkl modules, so they may be imported and used like any other module.
+This is particularly helpful when testing commands, as the command's `options` and `parent` properties can be populated by test code.
+
+Testing the above command and subcommand might look like this:
+
+[source,pkl%tested]
+----
+amends "pkl:test"
+
+import "my-tool.pkl"
+import "subcommand1.pkl"
+
+examples {
+  ["Test my-tool"] {
+    (`my-tool`) {
+      options {
+        // Set my-tool options here...
+      }
+    }.output.text
+  }
+  ["Test subcommand1"] {
+    (subcommand1) {
+      parent { // this amends `my-tool`
+        options {
+          // Set my-tool options here...
+        }
+      }
+      options {
+        // Set subcommand options here...
+      }
+    }.output.text
+  }
+}
+----
+
+=== Java API
+
+A few new Java APIs will be added.
+
+Record `org.pkl.core.CommandSpec` describes command trees (options, subcommands, etc.).
+
+Method `getDefaultElement` on `org.pkl.core.PType.Union` returns the default element of an exported union type.
+
+Method `evaluateCommand` on `org.pkl.core.Evaluator` provides an entrypoint for evaluating commands:
+
+[source,java]
+----
+  /**
+   * Parses the command into a spec describing it and invokes the {@code run} argument.
+   *
+   * <p>This requires that the target module be a command module; it must extend module {@code
+   * "pkl:Command"}. Otherwise, a type mismatch error is thrown.
+   *
+   * <p>Unlike other evaluator methods, the resulting {@link CommandSpec} must be handled in a
+   * closure. This is because specs must be applied to parsed CLI options to produce command state
+   * that is eventually evaluated, which must happen in the active context of an evaluator.
+   *
+   * @throws PklException if an error occurs during evaluation
+   * @throws IllegalStateException if this evaluator has already been closed
+   */
+  void evaluateCommand(ModuleSource moduleSource, Consumer<CommandSpec> run);
+----
+
+== Compatibility
+
+This proposal is purely additive.
+
+== Future directions
+
+=== CLI docs in `pkldoc`
+
+As an extension to this proposal, generated package documentation may be extended to include manpage-like documentation for command modules and classes.
+This stands to be particularly helpful when a command's options class inherits from another class as the documentation for all inherited flags could be flattened into the command's documentation.
+
+=== More built-in option types
+
+In future releases, built-in support for additional option types may be added in a forward-compatible fashion.
+If desired, types such as `Map<K, List<T>>` or `Pair<T, U>` could be supported.
+In most—if not all—cases, missing built-in types can be implemented using <<custom-option-parsing,`parse`>>.
+
+== Alternatives considered
+
+=== Defining options using Pkl data instead of annotated properties
+
+An alternative method of declaring CLI options was considered:
+
+[source,pkl]
+----
+/// The positional arguments for this script.
+args: Listing<Argument>
+
+/// The command line flag options for this script.
+flags: Mapping<String, Flag>
+
+/// T must be a primitive.
+class Flag<T> {
+  /// The description of this input.
+  description: String?
+
+  /// The short name of the flag, if any.
+  shortName: String?
+
+  /// The runtime value.
+  external value: T
+
+  /// The default value if no value is provided.
+  default: T?
+}
+
+class Argument<T> {
+  /// The description of this input.
+  description: String?
+
+  /// The metavariable name for CLI documentation
+  name: String?
+
+  /// The runtime value.
+  external value: T
+}
+----
+
+This was decided against for two main reasons:
+
+* It encumbers testing command modules or otherwise using them as a regular modules.
+* It is not "literate" Pkl, i.e. it doesn't reuse idioms Pkl users are familiar with such as doc comments and default values.
+
+=== Support for interspersed Pkl and command flags
+
+Instead of strictly requiring that all flags for Pkl precede the command module URI, an alternate method of avoiding ambiguity was discussed.
+This method would, for `pkl run` only, prefix all of Pkl's built-in CLI flags with `pkl.`.
+For example, `--root-dir` would become `--pkl.root-dir`.
+Option names would be forbidden from starting with `pkl.`.
+
+One advantage of this approach is that it's possible for users running commands via a script file with a shebang to still supply options to Pkl itself.
+In these cases, using a `PklProject` is the recommended alternative.
+
+The distinct downside to this method is that it changes the common, core behaviors of the `pkl` CLI for only a single subcommand.
+
+This requires making a tradeoff between two rules that must be remembered for `pkl run`. Either:
+
+* All flags for Pkl must go before the command module URI.
+* All flags for Pkl must be prefixed with `pkl.`.
+
+This proposal opts for the former as it is a more familiar idiom for handling CLI option ambiguities.
+
+== Acknowledgements
+
+This proposal evolved from a design document originally written by https://github.com/bioball[Dan Chao].
