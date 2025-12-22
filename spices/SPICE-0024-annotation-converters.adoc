@@ -88,41 +88,6 @@ output {
   }
 }
 ----
-* *Validating properties in nested structures* is only possible to achieve with copious boilerplate and usability impact.
-+
-[source,pkl]
-----
-softwareVersion: Int = 1
-
-addedInV1: String(softwareVersion >= 1)?
-
-addedInV2: String(softwareVersion >= 2)?
-
-hidden nestedConfig: NestedConfig
-
-fixed effectiveNestedConfig: NestedConfig = (nestedConfig) {
-  softwareVersion = module.softwareVersion
-}
-
-class NestedConfig {
-  hidden softwareVersion: Int
-
-  requiredProperty: String
-
-  addedInV1: String(softwareVersion >= 1)?
-
-  addedInV2: String(softwareVersion >= 2)?
-
-  hidden children: Listing<NestedConfig>
-
-  local self = this
-  fixed effectiveChildren: Listing<NestedConfig> = (children) {
-    [[true]] {
-      softwareVersion = self.softwareVersion
-    }
-  }
-}
-----
 
 == Proposed Solution
 
@@ -152,7 +117,7 @@ Annotation converters can overlap with link:{uri-stdlib-BaseValueRenderer}#conve
 abstract class BaseValueRenderer {
   // ...
 
-  annotationConverters: Mapping<Class, (String, unknown, unknown) -> Pair<String, Any>>
+  annotationConverters: Mapping<Class, (String, Annotation, unknown) -> Pair<String, Any>>
 
   // ...
 }
@@ -223,113 +188,26 @@ output {
   }
 }
 ----
-* *Validating properties in nested structures*
-+
-[source,pkl]
-----
-softwareVersion: Int = 2
-
-@Available { since = 2 }
-addedInV2: String?
-
-@Available { since = 3 }
-addedInV3: String?
-
-@Available { until = 2 }
-removedInV3: String?
-
-@Available { since = 2; until = 2 }
-presentInV2Only: String?
-
-nestedConfig: NestedConfig
-
-class NestedConfig {
-  requiredProperty: String
-
-  @Available { since = 2 }
-  addedInV2: String?
-
-  children: Listing<NestedConfig>
-}
-
-class Available extends Annotation {
-  since: Int?
-  until: Int?
-
-  function validate(target: Int, value: Any): Any =
-    if (value == null)
-      null
-    else if (since != null && target < since)
-      throw("Target version \(target) is lower than minimum version \(since)")
-    else if (until != null && until < target)
-      throw("Target version \(target) is higher than maximum version \(until)")
-    else
-      value
-}
-
-output {
-  renderer {
-    annotationConverters {
-      [Available] = (propertyName, annotation, value) ->
-        Pair(propertyName, annotation.validate(softwareVersion, value))
-    }
-  }
-}
-----
-
-=== Language Binding Libraries
-
-While annotation converters do not directly affect Pkl's language bindings, it is worth highlighting how they _can_ interact.
-The "Validating properties in nested structures" example above shows how annotation converters may be used for validations that need data "injected" from the top-level module being rendered.
-Most usage of Pkl's language bindings bypass renderers (and therefore converters of all kinds) entirely, which would skip such validation.
-
-Clients of Pkl's language bindings can change how they evaluate modules to take advantage of annotation converters.
-This is done by combining a small amount of Pkl module code with some changes on the client side.
-
-In Pkl, set up the link:{uri-bindings-specification}[`pkl-binary`] renderer:
-
-[source,pkl]
-----
-import "pkl:pklbinary"
-
-output {
-  renderer = new pklbinary.Renderer {
-    annotationConverters {
-    // Add validating converters here!
-    }
-  }
-}
-----
-
-In the client code, update how modules are evaluated:
-
-|===
-|Language |Old invocation |New invocation
-
-|Java/Kotlin
-|`ConfigEvaluator.evaluate(moduleSource)`
-|`Evaluator.evaluateOutputBytes(moduleSource)`
-
-`Config.fromPklBinary(bytes)`
-
-|Go
-|`Evaluator.EvaluateModule(ctx, moduleSource, &out)`
-|`Evaluator.EvaluateOutputBytes(ctx, moduleSource)`
-
-`pkl.Unmarshal(buf)`
-
-|Swift
-|`Evaluator.evaluateModule(moduleSource, T.self)`
-|`Evaluator.evaluateOutputBytes(moduleSource)`
-
-`PklDecoder.decode(T.self, from: bytes)`
-
-|===
 
 == Compatibility
 
 This is a purely additive change.
 Modules that adopt annotation converters will not be compatible with prior versions of Pkl.
+
+== Related Topics
+
+=== Converters providing validation
+
+One of the possible applications of converters (annotation-, class-, or path-based) is implementing validations that require non-`const` "global" information.
+A prime example of this is modules that support multiple versions of some software.
+These modules would likely want to enforce the availability of properties based on a user-supplied "target version" of the software.
+This  would be applicable to existing modules like https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-pantry/io.prometheus/current/index.html[`io.prometheus`] or https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-k8s/k8s/current/index.html[`pkl-k8s`] (which already provides an https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-k8s/k8s/current/K8sObject/K8sVersion.html[annotation for version availability]).
+
+The Pkl team views this use of converters as an antipattern primarily because it restricts consumers of a module use its renderer to perform validation.
+Users of Pkl's language bindings often bypass rendering entirely and consume the evaluated module value directly, which would bypass this style of validation.
+While it's possible to work around this use the xref:SPICE-0021-binary-renderer-and-parser.adoc[`pkl-binary`] renderer and evaluate a module's `output.bytes` property, this requires tighter coupling between a module and how it is consumed than desired.
+
+This sort of validation is something the team is interested in ergonomic support for, but is not a use case well-served by this proposal.
 
 == Future directions
 
