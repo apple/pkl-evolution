@@ -21,12 +21,15 @@ The process for a SPICE is:
 2. The pull request is reviewed, and either approved or rejected.
 3. The status of the SPICE is updated, and the pull request is merged.
 
+Accepted SPICEs are only merged once their feature has landed in a release.
+
 == Pkl language team
 
 The Pkl language team consists of (in alphabetical order):
 
 * Dan Chao (link:https://github.com/bioball[@bioball])
 * Islon Scherer (link:https://github.com/stackoverflow[@stackoverflow])
+* Jen Basch (https://github.com/HT154[@HT154])
 * Philip Hölzenspies (link:https://github.com/holzensp[@holzensp])
 
 == Credit
