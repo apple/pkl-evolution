@@ -266,6 +266,20 @@ By only enabling instrumentation for failing assertions, we only pay this cost f
 
 Power assertions are hidden from the error passed to `test.catch` and `test.catchOrNull`; these two APIs work exactly like they do today.
 
+=== Rendering values
+
+Values are emitted with the single-line value renderer, with the max line length set to 80.
+
+Values that are too long are truncated, just like they are today in constraint error messages.
+
+=== Opting out of power assertions
+
+Sometimes, power assertions may not be very informative.
+
+For example, a list might be too long and simply introduce noise in the resulting error message.
+
+User can use `throw()` within a failing constraint to provide their custom error message, rather than using power assertions.
+
 == Compatibility
 
 There is no impact on compatibility.
@@ -293,10 +307,23 @@ local startingStartsWithBub = (it: String) ->
   assert(it.starsWith("bub"), "Foo should start with bub.")
 ----
 
-=== Richer power assertions
+=== Richer diagrams
 
 We can possibly provide richer diagrams.
 For example, in the case of failing string comparison, to display a unified diff.
+
+[source]
+----
+–– Pkl Error ––
+Type constraint `stringsAreEqual` violated.
+
+    -expected +actual
+
+    -foo
+    +four
+
+1 | foo: String(stringsAreEqual) = "four"
+----
 
 == Alternatives considered
 
