@@ -106,7 +106,7 @@ The path resolution algorithm works like so:
 
 How path resolutions works is OS-dependent.
 Linux and macOS follow POSIX-style path resolution.
-Windows resolution behaves similarly, except that either `/` or `\` may be used as the path separator, and there is the additional handling of the drive letter.
+Windows resolution behaves similarly, except that either `/` or `\` may be used as the path separator, and there is the additional handling of drive letters and UNC paths.
 
 ==== Determining the base path
 
@@ -120,6 +120,9 @@ On POSIX:
 
 On Windows:
 `\file:///C:/project/dir/` -> `C:\project\dir\`
+
+On Windows with UNC paths:
+`\file://server/share/dir/` -> `\\server\share\dir\`
 
 Percent-encoded characters are decoded.
 
@@ -198,8 +201,49 @@ resolve(#"C:\project\dir\"#, ".") == #"C:\project\dir"#
 resolve(#"C:\project\dir\"#, #".\"#) == #"C:\project\dir\"#
 
 // `..` cannot remove root dir
-resolve(#"C:\"#, #"..\..\..\"#) == #"C:\"#"
+resolve(#"C:\"#, #"..\..\..\"#) == #"C:\"#
+
+// Empty path resolves to the base dir
+resolve(#"C:\project\dir\"#, "") == #"C:\project\dir\"#
 ----
+
+**Windows UNC Paths**
+
+UNC (Universal Naming Convention) paths on Windows have the form `\\server\share\path` and are used to access network resources.
+
+A UNC path is treated as an absolute path and resolves to itself:
+
+[source,pkl]
+----
+resolve(#"C:\project\dir\"#, #"\\server\share\data"#) == #"\\server\share\data"#
+resolve(#"\\server1\share1\dir\"#, #"\\server2\share2\data"#) == #"\\server2\share2\data"#
+----
+
+When the base path is a UNC path, relative paths are resolved against it:
+
+[source,pkl]
+----
+// Relative path appends to UNC base
+resolve(#"\\server\share\dir\"#, #"my\path"#) == #"\\server\share\dir\my\path"#
+
+// `..` removes the previous directory
+resolve(#"\\server\share\dir\sub\"#, #"..\my\path"#) == #"\\server\share\dir\my\path"#
+
+// `.` removes the previous slash
+resolve(#"\\server\share\dir\"#, ".") == #"\\server\share\dir"#
+
+// `..` cannot remove the UNC root (\\server\share\ is the root)
+resolve(#"\\server\share\"#, #"..\..\..\"#) == #"\\server\share\"#
+resolve(#"\\server\share\dir\"#, #"..\.."#) == #"\\server\share\"#
+
+// Drive letter path from UNC base resolves to that drive
+resolve(#"\\server\share\dir\"#, #"C:\local\path"#) == #"C:\local\path"#
+
+// Path starting with `\` from UNC base is ambiguous and treated as an error
+resolve(#"\\server\share\dir\"#, #"\absolute\path"#) // Pkl Error
+----
+
+NOTE: When resolving from a UNC base, a path starting with a single backslash (e.g., `\absolute\path`) is ambiguous—it could mean absolute on a drive or absolute on the same server. Pkl treats this as an error to avoid ambiguity.
 
 === `ExternalReader.executable` resolution
 
