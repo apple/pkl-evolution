@@ -93,9 +93,7 @@ hidden command: CommandInfo
 /// Command modules should override this property and provide their own options type.
 /// The properties of the specified type declare the command line flags and arguments accepted by
 /// the command.
-hidden options: BaseOptions
-
-open class BaseOptions // <1>
+hidden options: Typed
 
 class CommandInfo {
   /// The name of the subcommand.
@@ -124,11 +122,9 @@ class CommandInfo {
   /// Child commands.
   ///
   /// Must have unique [name] values.
-  subcommands: *Listing<Command> | Mapping<String, Command> // <2>
+  subcommands: Listing<Command>(isDistinctBy((it) -> it.name))
 }
 ----
-<1> `BaseOptions` is an empty class; commands provide their own class to define accepted flags/arguments.
-<2> Subcommands may be provided as a `Listing` (eg. several `import(...)` expressions) or a `Mapping` (eg. an `import*(...)` expression).
 
 Command implementers extend this module and override the type of the `options` property:
 
@@ -138,15 +134,12 @@ extends "pkl:Command"
 
 options: Options
 
-class Options extends BaseOptions {
+class Options {
   // define command options here...
 }
 ----
 
-NOTE: It is recommended that the class used for `options` in a command extend `pkl.Command#BaseOptions`.
-This is not strictly required, but avoids breakage in the future if/when Pkl enforces that overridden properties are subtypes of their parent.
-
-Commands can return a failure using throw (exit code 1), but otherwise may not control the exit code.
+Commands can return a failure using `throw` (exit code 1), but otherwise may not control the exit code.
 
 Commands may set `output.text`/`output.bytes` and/or `output.files`.
 Unlike `pkl eval`, both outputs (stdout and files) are processed for all commands, so commands may write files and generate output.
@@ -164,54 +157,141 @@ If additional functionality is desired, https://pkl-lang.org/main/current/langua
 === Defining options
 
 Each property of the class of a command's `options` property becomes a command line option.
+Properties with the `local`, `hidden`, `fixed`, and/or `const` modifiers are not parsed as options
 A property's doc comment, if present, becomes the corresponding option's CLI help description.
+Doc comments are interpreted as Markdown text and formatted nicely when displayed to users.
 Properties must have type annotations to determine how they are parsed.
 
-Properties may be annotated with `@Flag` or `@Argument` to influence how they behave:
+Properties may be annotated to influence how they behave:
+
+* Properties annotated with `@Flag` become CLI flags named `--<property name>` that accept a value.
+* `Boolean` properties annotated with `@BooleanFlag` become CLI flags named `--<property name>` and `--no-<property name>` that result in `true` and `false` values, respectively.
+* `Int` (and type aliases of `Int`) properties annotated with `@CountedFlag` become CLI flags named `--<property name>` that produce a value equal to the number of times they are present on the command line.
+* Properties annotated with `@Argument` become positional CLI arguments and are parsed in the order they appear in the class.
+* Properties with no annotation are treated the same as `@Flag` with no further customization.
+
+These annotations are defined like this:
 
 [source,pkl]
 ----
 /// Annotates [options] properties to configure them as named CLI flags.
-class Flag extends Annotation {
+abstract class BaseFlag extends Annotation {
   /// Abbreviated flag name.
   shortName: Char?
 
   /// Hide this option from CLI help.
   hide: Boolean = false
-
-  /// Customize the behavior of turning the raw option value string into the final value.
-  ///
-  /// If a function, the return type must match the annotated property's type.
-  /// If "import", the raw option is treated as an import URI.
-  /// If "import*", the raw option is treated as a glob import URI.
-  parse: (*((String) -> unknown) | "import" | "import*")?
 }
 
-/// Annotates [options] properties to configure them as positional CLI arguments.
-class Argument extends Annotation {
-  /// Customize the behavior of turning the raw option value string into the final value.
+/// Annotates an [options] property to configure it as a named CLI flag that accepts a value.
+class Flag extends BaseFlag {
+  /// Text to use in place of the option value in CLI help.
   ///
-  /// If a function, the return type must match the annotated property's type.
-  /// If "import", the raw option is treated as an import URI.
-  /// If "import*", the raw option is treated as a glob import URI.
-  parse: (*((String) -> unknown) | "import" | "import*")?
+  /// If not specified, the value is derived from the flag's type.
+  metavar: String?
+
+  /// Customize the behavior of parsing the raw option values.
+  ///
+  /// When the return value is an [Import] value or a [Pair] member, [List] or [Set] element
+  /// containing an [Import], the URI or glob URI specified by the value is imported and the value
+  /// is replaced with the value of the imported module(s).
+  ///
+  /// If no transform is provided, the raw flag value are parsed according to the option's type:
+  ///
+  /// | Type                       | Behavior |
+  /// | -------------------------- | -------- |
+  /// | [String]                   | Value is used verbatim |
+  /// | [Char]                     | Value is used verbatim; must be exactly one character |
+  /// | [Boolean]                  | True values: `true`, `t`, `1`, `yes`, `y`, `on`; False values: `false`, `f`, `0`, `no`, `n`, `off` |
+  /// | [Number]                   | Value is parsed as an [Int] if possible, otherwise parsed as [Float] |
+  /// | [Float]                    | Value is parsed as a [Float] |
+  /// | [Int]                      | Value is parsed as an [Int] |
+  /// | [Int8], [Int16], [Int32], [UInt], [UInt8], [UInt16], [UInt32] | Value is parsed as an [Int] and must be wihtin the type's range |
+  /// | Union of [String] literals | Value is used verbatim; must match a member of the union |
+  /// | [Listing], [List], [Set]   | Element values are parsed based on the above primitive types |
+  /// | [Mapping], [Map], [Pair]   | Value is split into a [Pair] on the first `"="` and each substring is parsed based on the above primitive types |
+  /// | Other types                | An error is thrown; `convert` should be defined explicitly |
+  convert: ((String) -> Any)?
+
+  /// Specifies whether the flag may be specified more than once.
+  ///
+  /// If not specified, this is determined based on the option's type.
+  /// Options with type [Listing], [List], [Set], [Mapping], or [Map] are mulitple by default.
+  /// Overriding this behavior generally requires setting [convert] and/or [transformAll].
+  multiple: Boolean?
+
+  /// Customize the behavior of turning all parsed flag values into the final option value.
+  ///
+  /// If no value is provided, all flag values are transformed according to the option's type:
+  ///
+  /// | Type              | Behavior |
+  /// | ----------------- | -------- |
+  /// | [Mapping], [Map]  | Each value must be a [Pair], each pair becomes an entry in the result. |
+  /// | [Listing], [List] | Result is all option values in the order specified |
+  /// | [Set]             | Result is all unique option values |
+  /// | Other types       | Result is the last value specified option value |
+  transformAll: ((List<Any>) -> Any)?
+}
+
+/// Annotates [Boolean] [options] properties to configure them as named CLI flags that may be
+/// specified zero or one times.
+///
+/// Boolean flags produce a pair of flags in the form `--<name>`/`--no-<name>`.
+///
+/// Annotating a property with a type other than [Boolean] is an error.
+class BooleanFlag extends BaseFlag
+
+/// Annotates [Integer] [options] properties to configure them as named CLI flags that may be
+/// specified zero or more times.
+///
+/// Counted flags produce a value equal to the number of times a flag is specified.
+///
+/// Annotating a property with a type other than [Int], [Int8], [Int16], [Int32], [UInt], [UInt8],
+/// [UInt16], or [UInt32] is an error.
+class CountedFlag extends BaseFlag
+
+/// Annotates an [options] property to configure it as a positional CLI argument.
+class Argument extends Annotation {
+  /// Customize the behavior of turning the raw option values string into the final value.
+  ///
+  /// When the return value is an [Import] value or a [Pair] member, [List] or [Set] element
+  /// containing an [Import], the URI or glob URI specified by the value is imported and the value
+  /// is replaced with the value of the imported module(s).
+  ///
+  /// If no value is provided, each option value is transformed using the same rules as
+  /// [Flag.convert].
+  convert: ((String) -> Any)?
+
+  /// Specifies whether the argument may be specified more than once.
+  ///
+  /// If not specified, this is determined based on the option's type.
+  /// Options with type [Listing], [List], [Set], [Mapping], or [Map] are multiple by default.
+  /// Overriding this behavior generally requires setting [convert] and/or [transformAll].
+  ///
+  /// Only one argument per command may be multiple.
+  multiple: Boolean?
+
+  /// Customize the behavior of turning all parsed flag values into the final option value.
+  ///
+  /// If no value is provided, all option values are transformed using the same rules as
+  /// [Flag.transformAll].
+  transformAll: ((List<Any>) -> Any)?
 }
 ----
 
-* Properties annotated with `@Flag` become CLI flags named `--<property name>`.
-* Properties annotated with `@Argument` become positional CLI arguments and are parsed in the order they appear in the class.
-* Properties with no annotation are treated the same as `@Flag` with no further customization.
+Flag options may set a `shortName` property to define a single-character alias (`-<short name>`).
+Like many other CLI flag systems, flag abbreviations may be combined (e.g. `-a -b -v -v -f some-value` is equivalent `-abvvf some-value`).
 
-A property's type determines how it is parsed:
+A `@Flag` or `@Argument` property's type annotation determines how it is converted from the raw string value:
 
 |===
-|Type |Notes
+|Type |Behavior
 
 |`String`
-|
+|Value is used verbatim.
 
 |`Char`
-|Behaves like `String` but must be a single character
+|Value is used verbatim but must be exactly one character.
 
 |`Boolean`
 |True values: `true`, `t`, `1`, `yes`, `y`, `on`
@@ -219,47 +299,98 @@ A property's type determines how it is parsed:
 False values: `false`, `f`, `0`, `no`, `n`, `off`
 
 |`Number`
-|Produces an `Int` if the value can be parsed as one, otherwise produces a `Float`
+|Value is parsed as an `Int` if possible, otherwise parsed as `Float`.
 
 |`Float`
-|
+|Value is parsed as a `Float`.
 
 |`Int`
-|
+|Value is parsed as a `Int`.
 
 |`Int8`, `Int16`, `Int32`, `UInt`, `UInt8`, `UInt16`, `UInt32`
-|Behaves like `Int` but enforces the type's bounds check
+|Value is parsed as a `Int` and must be within the type's range.
 
-|Union of string literals or a type alias to one
-|Behaves like `String` but only admits specific values.
+|Union of string literals
+|Value is used verbatim but must match a member of the union.
 
-|`List<Element>`, `Set<Element>`
-|`Element` type must be a primitive type or union of string literals.
+|`List<Element>`, `Listing<Element>`, `Set<Element>`
+|Each occurrence of the option becomes an element of the final value.
 
-Only a single `List` or `Set` positional argument is permitted per command.
+`Element` values are parsed based on the above primitive types.
 
-|`Map<Key, Value>`
-|`Key` and `Value` types must both be primitive types or unions of string literals.
+|`Map<Key, Value>`, `Mapping<Key, Value>`
+|Each occurrence of the option becomes an entry of the final value.
 
-Only applies to flags; forbidden for positional arguments.
+Values are split on the first `"="` character; the first part is parsed as `Key` and the second as `Value`, both based on the above primitive types.
+
+|`Pair<First, Second>`
+|Value is split on the first `"="` character; the first part is parsed as `First` and the second as `Second`, both based on the above primitive types.
 
 |===
 
+If a flag that accepts only a single value is provided multiple times, the last occurrence becomes the final value.
+
+Only a single positional argument accepting multiple values is permitted per command.
+
 A property with a nullable type is optional and, if not specified on the command line, will have value `null`.
-Type constraints are enforced when the command is executed.
+Properties with default values are also optional.
+Type constraints are evaluated when the command is executed, so additional restrictions on option values are enforced at runtime.
 
 [[custom-option-parsing]]
-==== Custom Option Parsing
+==== Custom Option Conversion and Aggregation
 
-A property may be annotated with any type if its `@Flag` or `@Argument` annotation has the `parse` property set.
-The `parse` property overrides how the raw option value is interpreted and may be set a few different ways:
+A property may be annotated with any type if its `@Flag` or `@Argument` annotation sets the `convert` or `transformAll` properties.
+The `convert` property is a lambda that overrides how _each_ raw option value is interpreted.
+The `transformAll` property is a lambda that overrides how _all_ parsed option values become the final property value.
 
-* An anonymous function that accepts the raw string value passed on the command line and returns a value of the property's annotated type.
-* The special value `"import"`, which treats the option's value as a module URI (as if it were passed to `pkl eval`) and sets the option's value to imported contents of the module.
-* The special value `"import*"`, which treats the option's value as a globbed module URI and sets the option's value to a `Mapping` with keys that are the resolved absolute module URIs and values that are the imported module contents. When specifying glob import options, it will often be necessary to quote the value to avoid it being interpreted by the shell.
+The `convert` function may return an `Import` value that is replaced during option parsing with the actual value of the module specified by its `uri` property.
+If `glob` is `true`, the replacement value is a `Mapping`; its keys are the _absolute_ URIs of the matched modules and its values are the actual module values.
+When specifying glob import options on the command line, it is often necessary to quote the value to avoid it being interpreted by the shell.
+If the return value of `convert` is a `List`, `Set`, `Map`, or `Pair`, each contained value (elements and entry keys/values) that are `Import` values are also replaced.
 
-Parse functions compose with `List<Element>`, `Set<Element>`, and `Map<Key, Value>` option types.
-The parse function is called once for each `List`/`Set` element or `Map` value.
+The `Import` class is defined like this:
+[source,pkl]
+----
+/// A value used in [Flag.convert] and [Argument.convert] to declare an option as a dynamic
+/// import.
+class Import {
+  /// The absolute URI of the module to import.
+  uri: String
+
+  /// Whether [uri] should be interpreted as a glob pattern.
+  ///
+  /// When `false`, the replacement value is the value of the specified module.
+  /// When `true`, the replacement value is a [Mapping] from [String] keys to matched module values.
+  glob: Boolean = false
+}
+----
+
+[IMPORTANT]
+====
+If an option has type `Mapping<String, «some module type»>` and should accept a single glob pattern value, the option's annotation must also set `multiple = false` to override the default behavior of `Mapping` options accepting multiple values.
+Example:
+[source,pkl]
+----
+@Flag {
+  convert = (it) -> new Import { uri = it; glob = true }
+  multiple = false
+}
+birds: Mapping<String, Bird>
+----
+
+If multiple glob patterns values should be accepted and merged, `transformAll` may be used to merge every glob-imported `Mapping`:
+[source,pkl]
+----
+@Flag {
+  convert = (it) -> new Import { uri = it; glob = true }
+  transformAll =
+    (values) -> values.fold(new Mapping {}, (result, element) ->
+      (result) { ...element }
+    )
+}
+birds: Mapping<String, Bird>
+----
+====
 
 For convenience, pre-built parse functions are provided for the standard library types `Duration` and `DataSize`:
 
@@ -274,23 +405,24 @@ local const function parseQuantity(value: String, typeName: String): Pair<Float,
     else
       Pair(match.groups[1].value.toFloat(), match.groups[2].value.toLowerCase())
 
-/// A parse function for [Duration] values.
+/// A convert function for [Duration] values.
 ///
-/// For use with [Flag.parse] and [Argument.parse].
-hidden const parseDuration: (String) -> Duration = (value: String) ->
+/// For use with [Flag.convert] and [Argument.convert].
+hidden const convertDuration: (String) -> Duration = (value: String) ->
   let (quantity = parseQuantity(value, "Duration"))
   let (_unit = quantity.second)
   let (unit = if (_unit is DurationUnit) _unit else null)
     quantity.first.toDuration(unit ?? throw("Unable to parse DurationUnit from '\(_unit)'"))
 
-/// A parse function for [DataSize] values.
+/// A convert function for [DataSize] values.
 ///
-/// For use with [Flag.parse] and [Argument.parse].
-hidden const parseDataSize: (String) -> DataSize = (value: String) ->
+/// For use with [Flag.convert] and [Argument.convert].
+hidden const convertDataSize: (String) -> DataSize = (value: String) ->
   let (quantity = parseQuantity(value, "DataSize"))
   let (_unit = quantity.second)
   let (unit = if (_unit is DataSizeUnit) _unit else null)
     quantity.first.toDataSize(unit ?? throw("Unable to parse DataSizeUnit from '\(_unit)'"))
+
 ----
 
 === Subcommands
@@ -303,13 +435,15 @@ Like many other command line libraries, `pkl:Command` allows building commands i
 extends "pkl:Command"
 
 command {
-  subcommands { // <1>
+  subcommands {
     import("subcommand1.pkl")
     import("subcommand2.pkl")
+    for (_, subcommand in import*("./subcommands/*.pkl")) {
+      subcommand
+    }
   }
 }
 ----
-<1> May also be assigned from a glob import, eg. `subcommands = import*("subcommand*.pkl")`
 
 [source,pkl%tested]
 .subcommand1.pkl
@@ -403,8 +537,8 @@ This stands to be particularly helpful when a command's options class inherits f
 === More built-in option types
 
 In future releases, built-in support for additional option types may be added in a forward-compatible fashion.
-If desired, types such as `Map<K, List<T>>` or `Pair<T, U>` could be supported.
-In most—if not all—cases, missing built-in types can be implemented using <<custom-option-parsing,`parse`>>.
+If desired, types such as `Map<K, List<T>>` could be supported without forcing users to use custom `convert` and/or `transformAll` functions.
+In most—if not all—cases, missing built-in types can be implemented using <<custom-option-parsing,`convert`>>.
 
 == Alternatives considered
 
@@ -452,24 +586,37 @@ This was decided against for two main reasons:
 * It encumbers testing command modules or otherwise using them as a regular modules.
 * It is not "literate" Pkl, i.e. it doesn't reuse idioms Pkl users are familiar with such as doc comments and default values.
 
-=== Support for interspersed Pkl and command flags
+=== Handling overlap with built-in flags
 
-Instead of strictly requiring that all flags for Pkl precede the command module URI, an alternate method of avoiding ambiguity was discussed.
+The distinct disadvantage of requiring all Pkl-native flags to be passed before the root command module URI is that it prevents customizing Pkl evaluator options (e.g. `--root-dir`) when running commands via shebang.
+
+
+Here are two alternate approaches considered:
+
+* Prefix built-in flags
++
 This method would, for `pkl run` only, prefix all of Pkl's built-in CLI flags with `pkl.`.
 For example, `--root-dir` would become `--pkl.root-dir`.
 Option names would be forbidden from starting with `pkl.`.
-
++
 One advantage of this approach is that it's possible for users running commands via a script file with a shebang to still supply options to Pkl itself.
 In these cases, using a `PklProject` is the recommended alternative.
-
++
 The distinct downside to this method is that it changes the common, core behaviors of the `pkl` CLI for only a single subcommand.
 
-This requires making a tradeoff between two rules that must be remembered for `pkl run`. Either:
+* Accept collisions
++
+This method would allow mixing built-in and command-specified options to mix in a single namespace.
+Any collisions between flag names would be detected at runtime and result in an error.
++
+This implies that adding any new CLI option that applies to `pkl run` (e.g. evaluator settings) would be a breaking change.
+This also drastically shrinks the available namespace for single-character short flag names, removing (at time of writing) `-w`, `-p`, `-f`, `-e`, and `-t` as allowed
 
-* All flags for Pkl must go before the command module URI.
-* All flags for Pkl must be prefixed with `pkl.`.
+This proposal opts to reduce special casing and avoid potential breakage instead.
+There are also two recommended workarounds for the shebang limitation:
 
-This proposal opts for the former as it is a more familiar idiom for handling CLI option ambiguities.
+* Use a `PklProject` to define evaluator settings instead of doing so on the command line.
+* If the command line must be used, switch to invoking via `pkl run [<flags>] [<root command module>]`.
 
 == Acknowledgements
 
