@@ -145,6 +145,7 @@ Commands may set `output.text`/`output.bytes` and/or `output.files`.
 Unlike `pkl eval`, both outputs (stdout and files) are processed for all commands, so commands may write files and generate output.
 Additionally, keys in `output.files` are not "sandboxed" by `--multiple-file-output-path`.
 Instead, file entries with absolute paths are written to the specified path and entries with relative path are written relative to the current working directory (or `--working-dir` if specified).
+Written file paths are printed to the command's standard error.
 
 IMPORTANT: Users of `pkl run` must be aware of the security implications of this behavior.
 Command line tools implemented in Pkl will be able to write or overwrite any file that the user has permissions to modify.
@@ -457,6 +458,43 @@ parent: `my-tool` // <1>
 // Regular module code...
 ----
 <1> Optional; asserts that this is a subcommand of `my-tool` and simplifies accessing properties and options of the parent command
+
+=== Commands as standalone scripts
+
+On *nix platforms, Pkl commands can be configured to run as standalone tools that can be invoked without the `pkl run` command.
+To achieve this, the command file must be marked executable (i.e. `chmod +x my-tool.pkl`) and a link:https://en.wikipedia.org/wiki/Shebang_(Unix)[shebang comment] must be added on the first line of the file:
+
+[source,pkl%parsed]
+----
+#!/usr/bin/env -S pkl run
+----
+
+NOTE: The `-S` flag for `env` is required on Linux systems due to a limitation of shebang handling in the Linux kernel.
+While not required on other *nix platforms like macOS, but it should be included for compatibility.
+
+==== Shell Completion
+
+Like with Pkl's own CLI, shell completions can be generated for standalone scripts.
+
+[source,shell]
+----
+# Generate shell completion script for bash
+./my-tool.pkl shell-completion bash
+
+# Generate shell completion script for zsh
+./my-tool.pkl shell-completion zsh
+----
+
+==== Customizing Completion Candidates
+
+`@Flag` and `@Argument` annotations may specify the `completionCandidates` to improve generated shell completions.
+
+Valid values include:
+
+* A `Listing<String>` of literal string values to offer for completion.
+* The literal string `"path"`, which offers local file paths for completion.
+
+Options with a string literal union type implicitly offer the members of the union as completion candidates.
 
 === Testing commands
 
