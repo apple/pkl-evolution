@@ -1,0 +1,399 @@
+:uri-package-docs: https://pkl-lang.org/package-docs
+:uri-bindings-specification: {uri-docs}/bindings-specification/binary-encoding.html
+:uri-stdlib-baseModule: {uri-package-docs}/pkl/current/base
+:uri-stdlib-Annotation: {uri-stdlib-baseModule}/Annotation
+:uri-stdlib-BaseValueRenderer: {uri-stdlib-baseModule}/BaseValueRenderer
+:uri-stdlib-Typed: {uri-stdlib-baseModule}/Typed
+:uri-stdlib-Pair: {uri-stdlib-baseModule}/Pair
+:uri-stdlib-RenderDirective: {uri-stdlib-baseModule}/RenderDirective
+
+= Annotation converters
+
+* Proposal: link:./SPICE-0024-annotation-converters.adoc[SPICE-0024]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.31
+* Category: Language, Standard Library, Tooling
+
+== Introduction
+
+This proposal introduces a mechanisms to use link:{uri-stdlib-Annotation}[`Annotations`] in link:{uri-stdlib-BaseValueRenderer}[value renderers] to declaratively transform property names and values of link:{uri-stdlib-Typed}[`Typed`] objects during rendering
+
+== Motivation
+
+Today, Pkl's renderers (subclasses of link:{uri-stdlib-BaseValueRenderer}[`BaseValueRenderer`]) offer link:{uri-stdlib-BaseValueRenderer}#converters[`converters`] to transform values during rendering based on their class or "path" through the rendered value.
+This functionality is fairly flexible, but there are some use cases that remain difficult or impossible to achieve:
+
+* *Transforming property names* is possible, but only by using a converter on the surrounding value, converting it to a `Map`, and transforming entries.
++
+[source,pkl]
+----
+class Bird {
+  birdName: String
+}
+
+output {
+  renderer {
+    converters {
+      // replace "birdName" with "bird_name"
+      [Bird] = (it) ->
+        it
+          .toMap()
+          .mapKeys((name) ->
+            name.replaceAllMapped(Regex("([a-z0-9])([A-Z])"), (match) ->
+              "\(match.groups[1].value)_\(match.groups[2].value.toLowerCase())"
+            )
+          )
+    }
+  }
+}
+----
+* *Converting the same type in different ways* is possible in some cases using path-based converters or by converting containing classes.
+Both of these approaches separate the presentation from the definition, making the code more difficult to understand and maintain.
++
+[source,pkl]
+----
+clientConfig: ClientConfig
+
+serverConfig: ServerConfig
+
+class ClientConfig {
+  timeoutH: Duration // render as hours
+}
+
+class ServerConfig {
+  readTimeoutS: Duration // render as seconds
+  readHeaderTimeoutMS: Duration // render as milliseconds
+  children: Listing<ServerConfig>
+}
+
+output {
+  renderer {
+    converters {
+      ["clientConfig.timeoutH"] = (it) -> it.timeoutS.toUnit("h").value
+      ["serverConfig.readTimeoutS"] = (it) -> it.readTimeoutS.toUnit("s").value
+      ["serverConfig.readHeaderTimeoutMS"] = (it) -> it.readHeaderTimeoutMS.toUnit("ms").value
+      // these are a bit inexact:
+      ["children[*].readTimeoutS"] = this["serverConfig.readTimeoutS"]
+      ["children[*].readHeaderTimeoutMS"] = this["serverConfig.readHeaderTimeoutMS"]
+
+      // OR
+
+      [ClientConfig] = (it) -> it.toMap().put("timeoutS", it.timeoutS.toUnit("s").value)
+      [ServerConfig] = (it) ->
+        it
+          .toMap()
+          .put("readTimeoutS", it.readTimeoutS.toUnit("s").value)
+          .put("readHeaderTimeoutMS", it.readHeaderTimeoutMS.toUnit("ms").value)
+    }
+  }
+}
+----
+
+== Proposed Solution
+
+To better serve these use cases, we propose adding a new type of converter based on property annotations alongside the existing class- and path-based converters.
+
+== Detailed design
+
+=== Pkl API
+
+A new `ConvertProperty` annotation class will be added to `pkl:base`.
+
+[source,pkl]
+----
+open class ConvertProperty extends Annotation {
+  /// Function called by [BaseValueRenderer] types during rendering to transform property
+  /// names and values.
+  render: (Pair<String, Any>, BaseValueRenderer) -> Pair<String, Any>
+}
+----
+
+Annotating a property with this class (or a subclass) registers an annotation converter for that property.
+Annotation converters are checked for each property of rendered link:{uri-stdlib-Typed}[`Typed`] values.
+The function must return a link:{uri-stdlib-Pair}[`Pair`] of the converted property name and value.
+
+Each of the property annotations of the enclosing class is checked in order, starting with the annotations (top to bottom) of the base class, then repeating for each child class in the hierarchy.
+Multiple annotation converters can apply per property; the output of one converter is used as input to the next.
+
+Annotation converters can overlap with link:{uri-stdlib-BaseValueRenderer}#converters[`converters`].
+They apply prior to class- and path-based converters.
+
+Additionally, a new property `convertPropertyTransformers` is introduced on link:{uri-stdlib-BaseValueRenderer}[`BaseValueRenderer`]:
+
+[source,pkl]
+----
+abstract class BaseValueRenderer {
+  // ...
+
+  convertPropertyTransformers: Mapping<Class, Mixin<ConvertProperty>>
+
+  // ...
+}
+----
+
+This provides a mechanism for augmenting or overriding annotation converter behaviors.
+For example, this could be used to:
+
+* Inject late bound module-level data into an annotation converter to influence its behavior.
+* Extend (by amending `render`) an annotation converter's behavior for a specific module or as a library consumer.
+* Disable (overwrite `render` to a no-op) an annotation converter for debugging purposes.
+
+=== Default property name converters for built-in renderers
+
+It's often desirable to transform property names (see "Transforming property names" above) differently for different rendered formats.
+For example, a property may be named with `snake_case` when rendered to JSON and `kebab-case` when rendered to YAML.
+
+Additional new APIs for per-format property renaming will be added for each built-in renderer that has a corresponding module:
+
+|===
+|Renderer Type |Property Annotation Type
+
+|`base.JsonRenderer` |`json.Property`
+|`base.YamlRenderer` |`yaml.Property`
+|`jsonnet.Renderer`  |`jsonnet.Property`
+|`protobuf.Renderer` |`protobuf.Property`
+|`xml.Renderer`      |`xml.Property`
+
+|===
+
+Renderers in `pkl:base` without a corresponding module (`PcfRenderer`, `PropertiesRenderer`, and `PlistRenderer`) will not receive corresponding annotations at this time.
+A corresponding annotation for `pklbinary.Renderer` is also omitted; the `pkl-binary` format is not intended to deviate from the native Pkl representation of `Typed` values, which is antithetical to property renaming.
+
+==== Example class
+
+.pkl:json
+[source,pkl]
+----
+/// Annotate properties of classes and modules with this class to override how a [JsonRenderer]
+/// interprets a property's name.
+class Property extends ConvertProperty {
+  /// The new name to use for the annotated property when rendered by [JsonRenderer].
+  name: String
+
+  render = (prop, renderer) -> if (renderer is JsonRenderer) Pair(name, prop.value) else prop
+}
+----
+
+This uses the second argument to `render`—the `BaseValueRenderer` instance doing the rendering—to conditionally determine if the property name should be converted.
+
+==== Usage example
+
+.fmt.pkl
+[source,pkl]
+----
+import "pkl:json"
+import "pkl:yaml"
+
+@json.Property { name = "foo_bar" }
+@yaml.Property { name = "foo-bar" }
+fooBar: String = "hello world"
+----
+
+[source,terminaloutput]
+----
+$ pkl eval fmt.pkl -f json
+{
+  "foo_bar": "hello world"
+}
+
+$ pkl eval fmt.pkl -f yaml
+foo-bar: hello world
+----
+
+=== Usage Examples
+
+The same scenarios above become simple to implement and maintain with annotation converters:
+
+* *Transforming property names*
++
+[source,pkl]
+----
+class SnakeCase extends ConvertProperty {
+  render = (prop, _) ->
+    Pair(
+      prop.key.replaceAllMapped(Regex("([a-z0-9])([A-Z])"), (match) ->
+        "\(match.groups[1].value)_\(match.groups[2].value.toLowerCase())"
+      ),
+      prop.value,
+    )
+}
+
+class Bird {
+  @SnakeCase
+  birdName: String
+}
+----
+* *Converting the same type in different ways*
++
+[source,pkl]
+----
+defaultDurationUnit: DurationUnit = "h"
+
+clientConfig: ClientConfig
+
+serverConfig: ServerConfig
+
+class ClientConfig {
+  @RenderDuration
+  timeoutH: Duration
+}
+
+class ServerConfig {
+  @RenderDuration { unit = "s" }
+  readTimeoutS: Duration
+  @RenderDuration { unit = "ms" }
+  readHeaderTimeoutMS: Duration
+  children: Listing<ServerConfig>
+}
+
+class RenderDuration extends ConvertProperty {
+  defaultUnit: DurationUnit
+  unit: DurationUnit?
+
+  render = (prop, _) -> Pair(prop.key, prop.value.toUnit(unit ?? defaultUnit).value)
+}
+
+output {
+  renderer {
+    convertPropertyTransformers {
+      [RenderDuration] { defaultUnit = defaultDurationUnit }
+    }
+  }
+}
+----
+
+=== Tooling
+
+For ideal user experience, small changes are needed in pkl-lsp and pkl-intellij to support inference of types in expressions / object bodies within `convertPropertyTransformers`.
+Similar handling exists for `converters` already.
+
+== Compatibility
+
+This is a purely additive change.
+Modules that adopt annotation converters will not be compatible with prior versions of Pkl.
+
+== Future Directions
+
+=== Converters during parsing
+
+Currently, the parser tools in Pkl's standard library (`json.Parser` and `yaml.Parser`) produce only `Dynamic` or `Mapping` values.
+These parsers support a `converters` property that works only with path-based converters to modify values as they're parsed.
+
+In the future, we desire to have the ability to parse directly to `Typed` values.
+The parser APIs may be extended accordingly:
+
+[source,pkl]
+----
+class Parser {
+  // ...
+
+  external function parse(source: Resource | String): Value
+
+  external function parseTyped(clazz: Class, source: Resource | String): Typed
+
+  // ...
+}
+----
+
+In this case, class based converters could be called prior to assigning values to properties with annotated class types.
+This is helpful, but cannot handle properties with union types, aliased types, etc.
+
+These cases could be served by annotation converters also applying during parsing.
+To support this, the `ConvertProperty` class may be extended:
+
+[source,pkl]
+----
+open class ConvertProperty extends Annotation {
+  render: (Pair<String, Any>, BaseValueRenderer) -> Pair<String, Any>
+
+  /// Called by a parser to determine the serialized key that corresponds to the annotated property.
+  ///
+  /// Defaults to the property's original name.
+  parseKey: (String, BaseParser) -> String = (key, _) -> key
+
+  /// Called by a parser to transform the serialized value into the final property value.
+  ///
+  /// Defaults to the input value.
+  parseValue: (Any, BaseParser) -> Any = (value, _) -> value
+}
+----
+
+The implementation of typed parsing will require its own SPICE if/when it is proposed.
+
+=== Render directives in annotation converters
+
+An earlier iteration of this proposal included support for link:{uri-stdlib-RenderDirective}[`RenderDirective`] return values in `render` functions:
+
+[source,pkl]
+----
+open class ConvertProperty extends Annotation {
+  render: (Pair<String, Any>, BaseValueRenderer) -> (Pair<String, Any> | RenderDirective)
+}
+----
+
+Renderers would handle these directives with the same whitespace as sibling properties
+One possible use for this would be inserting comments into rendered documents, which we agree is desirable:
+
+[source,pkl]
+----
+class Comment extends ConvertProperty {
+  text: String
+  render = (_, _) -> new RenderDirective { text = "// \(outer.text)" }
+}
+----
+
+This has been omitted because the semantics of how `RenderDirective` returns should interact with ordered composition of annotation converters is not clear.
+There are a few potential approaches, each with their own downside(s):
+
+* An annotation converter returning a `RenderDirective` would short-circuit checking of further annotations.
+This would limit the ability of subclasses to extend/override parent class behaviors.
+* If an annotation converter returns a `RenderDirective`, the next annotation is passed the property name and value state prior to the converter returning the directive:
+** If any converter returns a `RenderDirective`, the last directive wins.
+This limits the ability of child classes to override their parents if the parent declares an annotation converter that returns a `RenderDirective`.
+It's also a confusing rule to remember.
+** If any converter returns a `RenderDirective` but the last converter does not, the name and value returned last wins.
+This addresses concerns around overriding parent class behaviors, but is also a somewhat confusing rule that may be hard to debug.
+
+Support for this can be added in the future without breaking changes.
+
+Annotation converts may still return a `RenderDirective` as the converted property value.
+In this case, it will be treated identically to how they work with class- or path-based converters.
+
+== Related Topics
+
+=== Converters providing validation
+
+One of the possible applications of converters (annotation-, class-, or path-based) is implementing validations that require non-`const` "global" information.
+A prime example of this is modules that support multiple versions of some software.
+These modules would likely want to enforce the availability of properties based on a user-supplied "target version" of the software.
+This  would be applicable to existing modules like https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-pantry/io.prometheus/current/index.html[`io.prometheus`] or https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-k8s/k8s/current/index.html[`pkl-k8s`] (which already provides an https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-k8s/k8s/current/K8sObject/K8sVersion.html[annotation for version availability]).
+
+The Pkl team views this use of converters as an antipattern primarily because it restricts consumers of a module use its renderer to perform validation.
+Users of Pkl's language bindings often bypass rendering entirely and consume the evaluated module value directly, which would bypass this style of validation.
+While it's possible to work around this use the xref:SPICE-0021-binary-renderer-and-parser.adoc[`pkl-binary`] renderer and evaluate a module's `output.bytes` property, this requires tighter coupling between a module and how it is consumed than desired.
+
+This sort of validation is something the team is interested in ergonomic support for, but is not a use case well-served by this proposal.
+
+== Alternatives considered
+
+=== Explicit converter registration in `BaseValueRenderer`
+
+An earlier iteration of this design opted for explicitly defining the behavior of annotation converters using an `annotationConverters` property on `BaseValueRenderer`:
+
+[source,pkl]
+----
+abstract class BaseValueRenderer {
+  // ...
+
+  annotationConverters: Mapping<Class, (Annotation, String, unknown) -> Pair<String, Any>>
+
+  // ...
+}
+----
+
+This has the nice property of being congruent with `BaseValueRenderers.converters` so usage and debugging would be familiar to users.
+One major upside of this approach is that it provides a mechanism for modules to inject late bound data or override parent module behaviors.
+The downside of this approach is that it necessarily separates the definition of annotation converter classes from the code they use to run conversion, which could make reasoning about them difficult.
+
+These tradeoffs were synthesized into the design of `BaseValueRenderer.convertPropertyTransformers` which provides the same controls that explicitly defined converts would without forcing users to define annotation converters in multiple places.
