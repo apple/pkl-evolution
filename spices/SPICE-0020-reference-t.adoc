@@ -1,0 +1,120 @@
+= `Reference<T>`
+
+* Proposal: link:./SPICE-0020-reference-t.adoc[SPICE-0020]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.31
+* Category: Language, Standard Library, Tooling
+
+== Introduction
+
+`Reference<T>` provides a type-safe way to represent references to values that are not known at evaluation time.
+
+== Motivation
+
+Configurations written in Pkl sometimes represent values that do not exist at evaluation time, but where the type of the value is known.
+This often happens when configurations represent a directed acyclic graph (DAG) where data can be passed between nodes.
+In Pkl today, representing these relationships is challenging or limiting: either write a ton of boilerplate code or fall back to an un-validated representation for references.
+
+`Reference<T>` aims to close this gap by providing the same fidelity of type checking and IDE experience Pkl users are accustomed to when working with references to values not known at time of evaluation.
+
+Here are some specific examples where `Reference<T>` stands to have a large positive impact:
+
+=== Infrastructure as code systems
+
+Infrastructure as Code (IaC) tools like Pulumi and Terraform manage resources in remote systems.
+These tools model resources as a graph defining the order in which Create, Read, Update, and Delete (CRUD) operations are carried out.
+Users can explicitly define this graph by declaring dependencies between resources or implicitly by introducing a data dependency.
+Data dependencies exist when a resource's "output"—information that may only be known after the resource is actually created in the target system (eg. a unique identifier)—is referenced as an "input" to another resource.
+
+The inputs and outputs of a resource are typically strongly typed; these tools know that a particular resource's `id` output is a string and some other resource's `parentId` field accepts a string and when a data dependency is present the types are validated by the runtime.
+When representing these references in static formats like JSON or YAML, these tools opt to represent these references as strings containing some tool-specific expression syntax.
+
+In Pulumi's YAML runtime the `${<expr>}` syntax is used for this purpose
+A simple example of a data dependency might look like this:
+[source,yaml]
+----
+name: webserver
+runtime: yaml
+resources:
+  FirewallRule:
+    type: myCloud:FirewallRule
+    properties:
+      ingress:
+      - protocol: tcp
+        fromPort: 80
+        toPort: 80
+        cidrBlocks: ["0.0.0.0/0"]
+  WebServer:
+    type: myCloud:Instance
+    properties:
+      instanceSize: small
+      image: my-image-id
+      userData: |-
+          #!/bin/bash
+          echo 'Hello, World from ${FirewallRule.uuid}!' > index.html
+          nohup python -m SimpleHTTPServer 80 &
+      firewallRuleIds:
+        - ${FirewallRule}
+----
+
+It's also possible to represent this same program in Pkl:
+[source,pkl]
+----
+resources {
+  ["FirewallRule"] = new FirewallRule {
+    properties {
+      ingress {
+        new {
+          protocol = "tcp"
+          fromPort = 80
+          toPort = 80
+          cidrBlocks { "0.0.0.0/0" }
+        }
+      }
+    }
+  }
+  ["WebServer"] = new Instance {
+    properties {
+      instanceSize = "small"
+      image = "my-image-id"
+      userData = """
+        #!/bin/bash
+        echo 'Hello, World from ${FirewallRule.uuid}!' > index.html
+        nohup python -m SimpleHTTPServer 80 &
+        """
+      firewallRuleIds {
+        "${FirewallRule}"
+      }
+    }
+  }
+}
+----
+
+In this Pkl code, the references are represented exactly how they are in the original YAML: as un-typed, un-validated, and un-autocompleted opaque strings.
+This leads to a sub-par user experience, especially when contrasted against the developer experience Pkl provides for the rest of the code.
+
+=== Continuous integration systems
+
+Continuous integration (CI) systems provide a way to define actions (builds, tests, etc.) that run in response to various software development lifecycle events.
+Many CI systems define workflows consisting of tasks that depend on one another.
+Some CI systems provide a way to pass typed data between tasks.
+
+== Proposed Solution
+
+
+
+== Detailed design
+
+
+
+== Compatibility
+
+This proposal is additive and will not affect existing code.
+Modules that adopt annotation `Reference<T>` will not be compatible with prior versions of Pkl.
+
+== Future directions
+
+// Improved constraint handling.
+
+== Alternatives considered
