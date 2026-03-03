@@ -72,19 +72,7 @@ The `URLPattern` typealias defines glob patterns that are used to match the URLs
 
 To prevent accidental matches, the pattern should end with a slash (`/`) or a wildcard (`*`).
 
-If several patterns match a given request URL, the one with the highest specificity is selected. The specificity of a pattern is evaluated using the following process:
-
-1. Decompose the pattern into its components (scheme, host, path).
-2. Compute a score for the pattern by combining the host score and the path score:
-  - First, calculate a "base score" by adding points for each character and glob feature in the string:
-    - 10 points for every literal character (including escaped characters)
-    - 5 points for each character set (`[]`)
-    - 4 points for every single character wildcard (`?`)
-    - 2 points for each wildcard (`*`)
-    - 1 point for every globstar (`**`)
-    - For alternations (`{}`), use the average score of the included patterns.
-  - Then, multiply the host score by a weight of 100.
-3. When two patterns have identical scores, the longer pattern is considered more specific.
+If several patterns match a given request URL, all matching patterns will be considered and their headers will be applied.
 
 === The `HttpHeaderName` typealias
 
