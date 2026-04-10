@@ -14,7 +14,7 @@ This SPICE proposes the following changes:
 
 * Move this path resolution to within Pkl
 * Change property `executable` for `ExternalReader` to be relative to this enclosing directory
-* Add a property called `workingDir`
+* Add a property called `workingDirectory` to class `ExternalReader`
 
 == Motivation
 
@@ -239,11 +239,14 @@ resolve(#"\\server\share\dir\"#, #"..\.."#) == #"\\server\share\"#
 // Drive letter path from UNC base resolves to that drive
 resolve(#"\\server\share\dir\"#, #"C:\local\path"#) == #"C:\local\path"#
 
-// Path starting with `\` from UNC base is ambiguous and treated as an error
-resolve(#"\\server\share\dir\"#, #"\absolute\path"#) // Pkl Error
+// Path starting with `\` resolves to the UNC root (analogous to drive root)
+resolve(#"\\server\share\dir\sub\"#, #"\other\path"#) == #"\\server\share\other\path"#
 ----
 
-NOTE: When resolving from a UNC base, a path starting with a single backslash (e.g., `\absolute\path`) is ambiguous—it could mean absolute on a drive or absolute on the same server. Pkl treats this as an error to avoid ambiguity.
+**Other OS types**
+
+There are other operating systems that have different path representations (e.g. OpenVMS, RISC OS, and AmigaOS).
+These OSes are not supported by Pkl, so there is no specification for how these paths should be resolved.
 
 === `ExternalReader.executable` resolution
 
@@ -292,6 +295,9 @@ For example, the following change will be made to Java's `EvaluatorBuilder#apply
 +    var settings = project.getResolvedEvaluatorSettings();
 ----
 
+Additionally, a new nullable property `workingDirectory` is added to `ExternalReader`.
+This is added to the message passing API, and also should be added to the respective structs in downstream languages.
+
 == Compatibility
 
 This is a breaking change, because the resolution rules for the external reader changes to be resolved off of the project directory, instead of the working directory.
@@ -322,6 +328,17 @@ This SPICE requires some URI and path handling logic to be described in terms of
 Initially, this will be implemented as `local` properties.
 
 In the presence of a path and URI standard library, these local implementations should be removed.
+
+=== CLI flag for external reader workingDirectory
+
+A new property is added to external readers, called `workingDirectory`.
+
+This property is added to the Pkl API (to class `ExternalReader`), and also to the message passing API.
+
+However, this property is not added as a CLI flag.
+This is because the need is less likely, and it is unclear how this CLI flag should be added (how should the working dir be associated with each reader?).
+
+If needed, it's possible to add a new CLI flag to allow this property to be set.
 
 == Alternatives considered
 
