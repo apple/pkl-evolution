@@ -2,7 +2,7 @@
 
 * Proposal: link:./SPICE-0019-trailing-commas.adoc[SPICE-0019]
 * Author: https://github.com/HT154[Jen Basch]
-* Status: Accepted or Rejected
+* Status: Accepted
 * Implemented in: Pkl 0.30.0
 * Category: Language, Tooling
 

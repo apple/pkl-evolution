@@ -2,8 +2,8 @@
 
 * Proposal: link:./SPICE-0014-canonical-formatter.adoc[SPICE-0014]
 * Author: https://github.com/stackoverflow[Islon Scherer]
-* Status: TBD
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: 0.30
 * Category: Tooling
 
 == Introduction
@@ -87,7 +87,7 @@ The Java API will provide a way to use the formatter programmatically from any J
 class Formatter {
   /** Formats a Pkl file from the given file path. */
   fun format(path: Path, grammarVersion: GrammarVersion): String
-  
+
   fun format(text: String, grammarVersion: GrammarVersion): String
 }
 ----

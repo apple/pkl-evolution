@@ -11,7 +11,7 @@
 
 * Proposal: link:./SPICE-0024-annotation-converters.adoc[SPICE-0024]
 * Author: https://github.com/HT154[Jen Basch]
-* Status: TBD
+* Status: Accepted
 * Implemented in: Pkl 0.31
 * Category: Language, Standard Library, Tooling
 

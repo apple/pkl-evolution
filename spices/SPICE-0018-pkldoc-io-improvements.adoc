@@ -2,7 +2,7 @@
 
 * Proposal: link:./SPICE-0018-pkldoc-io-improvements.adoc[SPICE-0018]
 * Status: Accepted or Rejected
-* Implemented in: Pkl <version>
+* Implemented in: Pkl 0.30
 * Category: Tooling
 
 == Introduction

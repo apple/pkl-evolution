@@ -2,8 +2,8 @@
 
 * Proposal: link:./SPICE-0021-binary-renderer-and-parser.adoc[SPICE-0021]
 * Author: https://github.com/bioball[Dan Chao]
-* Status: Accepted or Rejected
-* Implemented in: TBD
+* Status: Accepted
+* Implemented in: Pkl 0.31
 * Category: Language
 
 == Introduction

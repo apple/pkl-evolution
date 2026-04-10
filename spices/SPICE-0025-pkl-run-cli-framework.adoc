@@ -2,7 +2,7 @@
 
 * Proposal: link:./SPICE-0025-pkl-run-cli-framework.adoc[SPICE-0025]
 * Author: https://github.com/HT154[Jen Basch]
-* Status: TBD
+* Status: Accepted
 * Implemented in: Pkl 0.31
 * Category: CLI, Standard Library
 

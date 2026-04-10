@@ -15,7 +15,7 @@
 
 * Proposal: link:./SPICE-0021-binary-renderer-and-parser.adoc[SPICE-0021]
 * Author: https://github.com/HT154[Jen Basch]
-* Status: Accepted or Rejected
+* Status: Accepted
 * Implemented in: Pkl 0.30
 * Category: Language, Standard Library
 
