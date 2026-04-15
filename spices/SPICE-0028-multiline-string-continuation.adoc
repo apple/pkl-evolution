@@ -1,0 +1,128 @@
+= Line Continuation for Multi-line Strings
+
+* Proposal: link:./SPICE-0028-multiline-string-continuation.adoc[SPICE-0028]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.32
+* Category: Language, Tooling
+
+== Introduction
+
+Grammar and parser updates to support `\` as a line continuation character in multi-line string literals.
+
+== Motivation
+
+In Pkl today, there is no ergonomic way to represent strings with very long lines that has good ergonomics.
+This is useful when templating complex documents or embedding other documents (like shell scripts) in Pkl code.
+Some formats like shell provide their own line continuation mechanism that can be used in Pkl, but it still may be desirable to produce exactly formatted output without newlines or making ergonomic compromises.
+In cases where the embedded string cannot contain newlines at all, the only options are to manually append strings with `+` or `List.join()`/`Listing.join()`.
+
+Other languages solve this problem in various ways:
+
+[cols="1,1a"]
+|===
+|*Language*
+|*Method*
+
+2+^|*Configuration Languages*
+
+|https://www.kcl-lang.io/docs/reference/lang/spec/datatypes#string[KCL]
+|Multi-line string literals support `\` as a continuation character, removing only the following newline.
+
+|https://cuelang.org/docs/tour/types/stringlit/[CUE]
+|No support for string continuation.
+
+|https://jsonnet.org/ref/spec.html#lexing[Jsonnet]
+|No support for string continuation.
+
+|https://yaml.org/spec/1.2.2/#double-quoted-style[YAML]
+|* Double-quoted string literals support `\` as a continuation character, removing all following whitespace.
+* Block scalars may be marked as "chomping" with `>` to indicate that newlines should be replaced with spaces.
+
+|https://toml.io/en/v1.1.0#string[TOML]
+|Multi-line string literals support `\` as a continuation character, removing all following whitespace.
+
+2+^|*General-purpose/Scripting Languages*
+
+|https://docs.swift.org/swift-book/documentation/the-swift-programming-language/stringsandcharacters/#Multiline-String-Literals[Swift]
+|Multi-line string literals support `\` as a continuation character. Whitespace matching the string end delimiter is stripped from the next line.
+
+|https://www.gnu.org/software/bash/manual/bash.html#Quoting[Bash]
+|Bash supports `\` as a continuation character outside of string literals, in double-quoted string literals, and in heredocs. Continuations remove only the following newline.
+
+|https://docs.python.org/3/reference/lexical_analysis.html#ignored-end-of-line[Python]
+|* All string literals support `\` as a continuation character.
+* Adjacent string literals are implicitly concatenated and may be grouped by `()` over multiple lines.
+
+|https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String[Javascript]
+|String literals support `\` as a continuation character, removing only the following newline.
+
+|https://doc.rust-lang.org/reference/expressions/literal-expr.html#string-continuation-escapes[Rust]
+|String literals support `\` as a continuation character, removing all following whitespace.
+
+|https://kotlinlang.org/docs/strings.html#string-literals[Kotlin]
+|No support for string continuation.
+
+|===
+
+This proposal opts to add `\` as a line continuation character only within multi-line string literals.
+Following the continuation, the newline and following whitespace matching the string end delimiter will be removed.
+This matches Swift's behavior.
+
+While matching Swift's behavior for string literals is a _non-goal_ for Pkl, there is value in aligning with users' prior knowledge and intuition.
+The Pkl language reference currently contains a footnote listing some of the remaining differences:
+
+> Pkl’s string literals have fewer character escape sequences, have stricter rules for line indentation in multiline strings, and do not have a line continuation character.
+
+This proposal will close that last gap.
+
+== Proposed Solution
+
+Backslash (`\`) will be added as a line continuation character.
+
+[source,pkl]
+----
+local multiLine = // <1>
+  """
+  Hello, \
+  World!
+  """
+----
+<1> Equal to `"Hello, World!"`
+
+In literals with custom delimiters, the `\` must be followed by the same number of `#` used by the literal's delimiters.
+[source,pkl]
+----
+local multiLine =
+  #"""
+  Hello, \#
+  World!
+  """#
+----
+
+It is invalid for any whitespace other than a newline (`\n`) to follow the `\`.
+This will result in a "Invalid character escape sequence" error during parsing since `\«space»` and `\«tab»` are not valid escape sequences.
+
+Line continuation is only applicable to multi-line string literals; using one in a single-line string literal will result in a "Invalid line continuation escape sequence" error during parsing.
+
+== Detailed design
+
+Support line continuations requires some minor changes in several places:
+
+* `pkl-parser`
+** Add a `Token` and support for it in `Lexer`.
+** Add support for parsing continuations in `Parser` and `GenericParser`.
+* `pkl-core` - Mark line continuations as a string escape in `SyntaxHighlighter`.
+* `pkl-formatter` - Ensure `Builder` formats continuations correctly.
+* `pkl-intellij` - Add support for line continuations in the grammar and constraint checker.
+* `pkl-lsp` - Add support for line continuations in the constraint checker.
+* `tree-sitter-pkl` - Add support for line continuations in the grammar.
+** Changes must be adopted in `pkl-lsp`, `pkl-vscode`, and `pkl-neovim`
+* `highlightjs-pkl` - Add support for line continuations in the grammar.
+
+== Compatibility
+
+This proposal has no compatibility implications.
+
+Code that was previously invalid will become valid.
+Because the formatter will never insert new line continuations, a new formatter grammar version is not needed.
