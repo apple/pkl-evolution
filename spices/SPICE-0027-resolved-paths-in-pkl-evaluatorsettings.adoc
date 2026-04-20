@@ -1,0 +1,358 @@
+= SPICE-0027: Resolved paths in pkl:EvaluatorSettings
+
+* Proposal: link:./SPICE-0027-resolved-paths-in-pkl-evaluatorsettings.adoc[SPICE-0027]
+* Author: https://github.com/bioball[Dan Chao]
+* Status: TBD
+* Implemented in: Pkl <version>
+* Category: Standard Library
+
+== Introduction
+
+Certain settings within `pkl:EvaluatorSettings` are meant to be resolved relative to an enclosing directory.
+
+This SPICE proposes the following changes:
+
+* Move this path resolution to within Pkl
+* Change property `executable` for `ExternalReader` to be relative to this enclosing directory
+* Add a property called `workingDir`
+
+== Motivation
+
+Certain settings within module `pkl:EvaluatorSettings` are file paths.
+These are:
+
+* `rootDir`
+* `moduleCacheDir`
+* `modulePath`
+* `ExternalReader.executable`
+
+Currently, Pkl has the following behavior when these settings are used within a `PklProject`:
+
+* `rootDir`, `moduleCacheDir`, and `modulePath` are expected to be resolved relative to the project directory.
+    * This works if code is executed by via Java `Project.load` (`pkl` CLI, pkl's Java APIs)
+    * External clients using `Project` must take care to resolve this path correctly.
+* `ExternalReader.executable` follows the OS loading rules, resolved against PWD.
+
+This introduces some problems:
+
+* Pkl is inconsistent about what relative paths mean. `rootDir`, `moduleCacheDir`, and `modulePath` are relative to the project dir, while `ExternalReader.executable` is relative to the PWD.
+* External readers defined in a PklProject have different behavior depending on the PWD.
+* The logic for resolving these paths is dependent on the caller, rather than Pkl.
+
+== Proposed Solution
+
+The following changes will be made:
+
+* Pkl will resolve these paths in-language.
+* `ExternalReader.executable` will change to be resolved relative to the project directory.
+* A new property, `ExternalReader.workingDirectory` will be introduced. It will default to the project directory.
+
+== Detailed design
+
+=== Standard library changes
+
+The following new properties will be added:
+
+* `EvaluatorSettings.resolved`
+* `EvaluatorSettings.basePath`
+* `EvaluatorSettings.ExternalReader.workingDirectory`
+* `Project.resolvedEvaluatorSettings`
+
+.pkl:EvaluatorSettings
+[source,pkl]
+----
+module pkl.EvaluatorSettings
+
+import "pkl:EvaluatorSettings"
+
+/// The base path, used to resolve relative paths in [resolved].
+@Since { version = "0.31.0" }
+hidden baseUri: String
+
+/// These evaluator settings whose paths are resolved against [baseUri].
+@Since { version = "0.31.0" }
+hidden fixed resolved: EvaluatorSettings = (module) {
+  // implementation
+}
+
+class ExternalReader {
+  /// The working directory used to launch the executable.
+  @Since { version = "0.31.0" }
+  workingDirectory: String
+}
+----
+
+A new property called `resolvedEvaluatorSettings` will be added to `pkl:Project`.
+
+.pkl:Project
+[source,pkl]
+----
+module pkl.Project
+
+@Since { version = "0.31.0" }
+fixed resolvedEvaluatorSettings =
+  (evaluatorSettings) {
+    baseUri = projectFileUri.substring(0, projectFileUri.lastIndexOf("/"))
+  }.resolved
+----
+
+[[path-resolution]]
+=== Path resolution
+
+The path resolution algorithm works like so:
+
+1. Determine the base path
+2. Join the base path and the declared path.
+
+How path resolutions works is OS-dependent.
+Linux and macOS follow POSIX-style path resolution.
+Windows resolution behaves similarly, except that either `/` or `\` may be used as the path separator, and there is the additional handling of drive letters and UNC paths.
+
+==== Determining the base path
+
+Given, `Project.projectFileUri`, get the base file URI.
+For example, `\file:///project/dir/PklProject` becomes `\file:///project/dir/`
+
+From base file URI, determine the base path.
+
+On POSIX:
+`\file:///project/dir/` -> `/project/dir/`
+
+On Windows:
+`\file:///C:/project/dir/` -> `C:\project\dir\`
+
+On Windows with UNC paths:
+`\file://server/share/dir/` -> `\\server\share\dir\`
+
+Percent-encoded characters are decoded.
+
+`\file:///project/dir%20with%20spaces/` ->
+`/project/dir with spaces`
+
+==== Resolving the path
+
+**POSIX**
+
+On POSIX, a path that starts with a slash resolves to itself
+
+[source,pkl]
+----
+resolve("/project/dir/", "/my/path") == "/my/path"
+----
+
+Otherwise, the path is concatenated to the base path and normalized as per POSIX rules, except:
+
+[source,pkl]
+----
+resolve("/project/dir/", "my/path") == "/project/dir/my/path"
+
+// multiple slashes collapse into one slash
+resolve("/project/dir/", "my////path") == "/project/dir/my/path"
+
+// `..` removes the previous dir
+resolve("/project/dir/", "../my/path") == "/project/my/path"
+
+// `.` removes the previous slash
+resolve("/project/dir/", ".") == "/project/dir"
+resolve("/project/dir/", "./") == "/project/dir/"
+
+// `..` cannot remove the root dir
+resolve("/", "../../../") == "/"
+
+// Empty path resolves to the base dir
+resolve("/project/dir/", "") == "/project/dir/"
+----
+
+**Windows**
+
+On Windows, a path that starts with a drive letter resolves to that path.
+
+[source,pkl]
+----
+resolve(#"C:\project\dir\"#, #"D:\my\path"#) == #"D:\my\path"#
+// Missing slash after colon an error (this is allowed on Windows, and resolves relative to the PWD, which we don't want).
+resolve(#"C:\project\dir\"#, #"D:my\path"#) // Pkl Error
+----
+
+A path that starts with the path separator resolves off the base path's drive:
+
+[source,pkl]
+----
+resolve(#"C:\project\dir\"#, #"\my\path"#) == #"C:\my\path"#
+----
+
+Otherwise, the path is concatenated to the base path and normalized as per POSIX rules, except:
+
+1. Either `\` or `/` is allowed as a separators.
+2. The root includes the drive letter.
+
+[source,pkl]
+----
+resolve(#"C:\project\dir\"#, #"my\path"#) == #"C:\project\dir\my\path"#
+
+// forward slashes are turned into backslashes
+resolve(#"C:\project\dir\"#, "my/path") == #"C:\project\dir\my\path"#
+
+// `..` removes the previous directory
+resolve(#"C:\project\dir\"#, #"..\my\path"#) == #"C:\project\my\path"#
+
+// `.` removes the previous slash
+resolve(#"C:\project\dir\"#, ".") == #"C:\project\dir"#
+resolve(#"C:\project\dir\"#, #".\"#) == #"C:\project\dir\"#
+
+// `..` cannot remove root dir
+resolve(#"C:\"#, #"..\..\..\"#) == #"C:\"#
+
+// Empty path resolves to the base dir
+resolve(#"C:\project\dir\"#, "") == #"C:\project\dir\"#
+----
+
+**Windows UNC Paths**
+
+UNC (Universal Naming Convention) paths on Windows have the form `\\server\share\path` and are used to access network resources.
+
+A UNC path is treated as an absolute path and resolves to itself:
+
+[source,pkl]
+----
+resolve(#"C:\project\dir\"#, #"\\server\share\data"#) == #"\\server\share\data"#
+resolve(#"\\server1\share1\dir\"#, #"\\server2\share2\data"#) == #"\\server2\share2\data"#
+----
+
+When the base path is a UNC path, relative paths are resolved against it:
+
+[source,pkl]
+----
+// Relative path appends to UNC base
+resolve(#"\\server\share\dir\"#, #"my\path"#) == #"\\server\share\dir\my\path"#
+
+// `..` removes the previous directory
+resolve(#"\\server\share\dir\sub\"#, #"..\my\path"#) == #"\\server\share\dir\my\path"#
+
+// `.` removes the previous slash
+resolve(#"\\server\share\dir\"#, ".") == #"\\server\share\dir"#
+
+// `..` cannot remove the UNC root (\\server\share\ is the root)
+resolve(#"\\server\share\"#, #"..\..\..\"#) == #"\\server\share\"#
+resolve(#"\\server\share\dir\"#, #"..\.."#) == #"\\server\share\"#
+
+// Drive letter path from UNC base resolves to that drive
+resolve(#"\\server\share\dir\"#, #"C:\local\path"#) == #"C:\local\path"#
+
+// Path starting with `\` from UNC base is ambiguous and treated as an error
+resolve(#"\\server\share\dir\"#, #"\absolute\path"#) // Pkl Error
+----
+
+NOTE: When resolving from a UNC base, a path starting with a single backslash (e.g., `\absolute\path`) is ambiguous—it could mean absolute on a drive or absolute on the same server. Pkl treats this as an error to avoid ambiguity.
+
+=== `ExternalReader.executable` resolution
+
+When resolving `ExternalReader.executable`, most of the same rules apply, except that if the executable does not contain path separators, it is kept as-is.
+The underlying external reader implementation will then resolve this off of the `PATH` environment variable.
+
+[source,pkl]
+----
+externalModuleReaders {
+  ["foo"] {
+    executable = "my-foo-reader" // kept as-is.
+  }
+}
+----
+
+Resolving this executable follows OS resolution rules:
+
+1. On Windows, it will look for a filename with an executable extension
+2. On POSIX, it will look for that filename, whose file mode marks it as executable.
+
+=== Language implementation changes
+
+==== External reader changes
+
+The new `workingDirectory` property will be added as an optional property.
+This means changes to:
+
+* The message passing API
+* record `org.pkl.core.evaluatorSettings.PklEvaluatorSettings.ExternalReader`
+
+If not set, it defaults to the current working directory.
+
+==== Language binding changes
+
+On the language binding side, the project loading will change to apply settings from `resolvedEvaluatorSettings`.
+
+This logic will be changed in pkl-go, pkl-swift, and pkl-core (Java).
+
+For example, the following change will be made to Java's `EvaluatorBuilder#applyFromProject`:
+
+[source,diff]
+----
+   EvaluatorBuilder applyFromProject(Project project) {
+     this.dependencies = project.getDependencies();
+-    var settings = project.getEvaluatorSettings();
++    var settings = project.getResolvedEvaluatorSettings();
+----
+
+== Compatibility
+
+This is a breaking change, because the resolution rules for the external reader changes to be resolved off of the project directory, instead of the working directory.
+
+There will be no deprecation period here before switching to the new behavior.
+
+However, those that want Pkl to behave this way can use `env("read:PWD")` to keep resolving executables off the PWD.
+
+.PklProject
+[source,pkl]
+----
+amends "pkl:Project"
+
+evaluatorSettings {
+  externalModuleReaders {
+    ["foo"] {
+      executable = "\(read("env:PWD"))/my/executable"
+    }
+  }
+}
+----
+
+== Future directions
+
+=== URI and Path libraries
+
+This SPICE requires some URI and path handling logic to be described in terms of Pkl code.
+Initially, this will be implemented as `local` properties.
+
+In the presence of a path and URI standard library, these local implementations should be removed.
+
+== Alternatives considered
+
+=== Using URIs instead of file paths
+
+Instead of resolving to file paths, `EvaluatorSettings.resolved` can resolve to `file:` URIs.
+
+For example, instead of producing `C:\path\to\dir`, it would produce `\file:///C:/path/to/dir`.
+
+This approach has the following benefits:
+
+1. It is possible to specify `rootDir` and other related settings when using a non-file `PklProject`. +
++
+Currently, it is not possible to use these settings when embedding a PklProject (e.g. loading it off `modulepath:`). +
+This is because the project directory itself is not a filepath, so it is not possible to eventually resolve into a file path. +
++
+However, if URIs could be specified, a `file:` URI unambiguously still represents a filepath.
+2. It allows us to treat `/` as the file separator on all OSes.
+3. It allows the possibility of specifying executables in non-file locations. +
++
+This might help with the portability of external readers. +
+For example: `executable = "package://pkg.pkl-lang.org/pkl-readers/myreader@1.0.0#/my-executable"`
+
+However, this has the following drawbacks:
+
+1. It does not align with how CLI arguments work, or in-language APIs work. +
++
+Within a Windows shell, it is valid to call `pkl eval --root-dir C:\path\to\dir\`.
+It is therefore inconsistent that we do not allow this value inside a PklProject.
+2. The specification for URI resolution would not correctly handle drive letters in Windows.
++
+For example, according to the specification, `resolve("file:///C:/path/to/dir/", "/another/dir")` should return `"file:///another/dir"`.
+
+Additionally, making this choice does not preclude allowing for URIs in the future.
