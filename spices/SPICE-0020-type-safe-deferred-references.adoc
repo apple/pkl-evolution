@@ -2,7 +2,7 @@
 
 * Proposal: link:./SPICE-0020-type-safe-deferred-references.adoc[SPICE-0020]
 * Author: https://github.com/HT154[Jen Basch]
-* Status: TBD
+* Status: Accepted
 * Implemented in: Pkl 0.32
 * Category: Language, Standard Library, Tooling
 
@@ -128,20 +128,51 @@ The data of a `Reference` may be retrieved using its `getData()` method.
 The path of a `Reference` may be retrieved using its `getPath()` method.
 * Referent type - The type of the value that the reference refers to.
 
-The key feature of a `Reference` is that it inherits properties and subscript behavior from its `T` type argument.
-When a reference is accessed, either via qualified property access
-(`<reference>.<property>`) or subscript (`<reference>[<key>]`), a new reference is returned.
-The new reference shares its domain and data with the original reference.
-The new reference's path extends the original reference's path, adding a new `ref.Access` instance describing the accessed property name or subscript key.
-The new reference's referent type is the type of the accessed property or subscript value of the original referent type.
-Any type constraints within the new referent type are erased and type constraints are not allowed in the referent (second) type argument of any Reference type annotations.
+**Member Access**
 
-There are some restrictions on properties that may be referenced; attempting to reference these properties will fail:
+The key feature of a `Reference` is that it inherits properties and subscript behavior from its `T` type argument. Given the following declaration:
 
-* Properties marked `external` or `local`
-* All properties of `external` classes
-* The `default` property of `Listing`, `Mapping`, and `Dynamic`
-* Properties originally defined in `external` classes (this only includes `Module.output`)
+[source,pkl]
+----
+class Bird { name: String }
+----
+
+A `Reference<MyDomain, Bird>` will contain synthetic property `name: Reference<MyDomain, String>`.
+
+The synthesized reference contains the same domain and data as the original reference.
+This reference's path extends the original reference's with an `Access` instance describing the accessed property name or subscript key.
+
+**Union Types**
+
+When a reference's referent type is a union, only member access that is valid for all elements of the union type is allowed on the reference. Given the following declarations:
+
+[source,pkl]
+----
+class Bird {
+  name: String
+  wingspanMeters: Float
+}
+
+class Mammal {
+  name: String
+  legCount: UInt
+}
+----
+
+A `Reference<MyDomain, Bird | Mammal>` will contain only synthetic property `name: Reference<MyDomain, String>`.
+Attempting to access the `wingspanMeters` or `legCount` properties would result in an error.
+
+**Limitations**
+
+. Properties with the `external` modifier may not be accessed.
+. Properties defined inside external classes may not be accessed.
+. The `Listing.default`, `Mapping.default`, and `Dynamic.default` properties may not be
+   accessed.
+. Constrained types cannot be referent types.
+** Declaring `Reference<MyDomain, String(length.isOdd)>` will throw an error.
+** Member access will return a new reference whose referent type has its constraints erased.
+
+**Construction**
 
 `Reference` instances are created with the constructor method of the same name.
 This method accepts three parameters:
@@ -174,14 +205,18 @@ external class Reference<out D, out T> {
 }
 ----
 
+[[pcfrenderer-limitation]]
+`Reference` instances can be rendered natively by `pkl.pklbinary#Renderer`, but no other built-in renderer supports rendering `Reference` values without a converter.
+Ideally, `PcfRenderer` would support rendering references, but there are some challenges involved, downstream of Pcf's goal of being valid Pkl syntax:
+
+* The `Reference` constructor is not in the `pkl.base` module like the other types Pcf renders as constructor calls.
+* The constructor currently requires passing a `Class` value, which cannot be rendered as Pcf without a converter.
+* If/when Pkl gains <<reified-types, reified types>> and the `Reference` constructor adopts them, it's not clear how these values should be treated in Pcf.
+
 ==== `Reference` constructor method
 
 The entrypoint for creating `Reference` values.
 This method requires a `domain` object (an instance of a subclass of <<domain-class,`Domain`>>), a `class` that becomes the initial referent type, and an arbitrary `data` value.
-
-Note that only class types may be used to create an initial reference.
-This is a restriction of the language at the current time.
-Ideally <<reified-type-arg,reified type arguments>> could be used instead to eliminate this restriction.
 
 [source,pkl]
 ----
@@ -191,6 +226,11 @@ external const function Reference<D, T>(
   data: Any,
 ): Reference<D, T>
 ----
+
+[[construction-class-type-limitation]]
+NOTE: only class types may be used to create an initial reference.
+This is a restriction of the language at the current time.
+Ideally <<reified-types,reified types>> could be used instead to eliminate this restriction.
 
 [[domain-class]]
 ==== `Domain` abstract class
@@ -299,12 +339,23 @@ Tooling will support:
 This proposal is additive and will not affect existing code.
 Pkl modules that adopt `Reference` will not be compatible with prior versions of Pkl.
 
+== Release as Experimental
+
+References are targeted for release as-proposed with Pkl 0.32 in an "experimental" state.
+This means that the API and semantics of references may change in a future release; the feature's documentation will note this prominently.
+
+We have opted for this approach for a few reasons:
+
+* The feature is novel and complex, so we wish to allow libraries authors considering adoption opportunity to test the feature and provide feedback before we guarantee compatibility.
+* We wish to remove the <<construction-class-type-limitation,limitation that references may only be constructed with simple class types>> before a stable release.
+* <<pcfrenderer-limitation,`PcfRenderer` cannot render `Reference` values>> currently and we would like to remove this limitation.
+
 == Future directions
 
 Many future directions for references are tied up in other language features that would stand to make references more expressive and/or easier to use.
 
-[[reified-type-arg]]
-=== Reified type arguments
+[[reified-types]]
+=== Reified types
 
 Currently, creation of new references is limited to referents with non-generic class types.
 To refer to a value of another kind of type (generic, nullable, union, typealias, etc.), it's necessary to use a "holder" class as an intermediary:
@@ -334,6 +385,25 @@ r = ref.Reference<MyDomain, Listing<String>>(myDomain, <data>)
 ----
 
 This implementation might pass the `TypeNode` of the specified `T` type through as a sugared method parameter.
+
+An alternative approach would be to make types a first-class value in the language:
+
+[source,pkl]
+----
+// in pkl.ref
+external const function Reference<D, T>(
+  domain: D(this is Domain),
+  type: T.Type
+  data: Any,
+): Reference<D, T>
+
+// usage may take a few forms:
+// swift-like
+r = ref.Reference<MyDomain, Listing<String>>(myDomain, Listing<String>.self, <data>)
+// a typeOf() operator
+r = ref.Reference<MyDomain, Listing<String>>(myDomain, typeOf(Listing<String>), <data>)
+// or maybe something else entirely!
+----
 
 === `this` as a self type
 
