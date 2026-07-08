@@ -2,8 +2,8 @@
 
 * Proposal: link:./SPICE-0027-resolved-paths-in-pkl-evaluatorsettings.adoc[SPICE-0027]
 * Author: https://github.com/bioball[Dan Chao]
-* Status: TBD
-* Implemented in: Pkl <version>
+* Status: Accepted
+* Implemented in: Pkl 0.32
 * Category: Standard Library
 
 == Introduction
@@ -51,10 +51,10 @@ The following changes will be made:
 
 === Standard library changes
 
-The following new properties will be added:
+The following new methods will be added:
 
-* `EvaluatorSettings.resolved`
-* `EvaluatorSettings.basePath`
+* `EvaluatorSettings.resolve()`
+* `EvaluatorSettings.resolveForOs()`
 * `EvaluatorSettings.ExternalReader.workingDirectory`
 * `Project.resolvedEvaluatorSettings`
 
@@ -66,18 +66,20 @@ module pkl.EvaluatorSettings
 import "pkl:EvaluatorSettings"
 
 /// The base path, used to resolve relative paths in [resolved].
-@Since { version = "0.31.0" }
+@Since { version = "0.32.0" }
 hidden baseUri: String
 
 /// These evaluator settings whose paths are resolved against [baseUri].
-@Since { version = "0.31.0" }
-hidden fixed resolved: EvaluatorSettings = (module) {
+@Since { version = "0.32.0" }
+function resolve(enclosingUri: Uri): EvaluatorSettings =
   // implementation
-}
+
+@Since { version = "0.32.0" }
+function resolveForOs(enclosingUri: Uri, os: platform.OperatingSystem): EvaluatorSettings = // implementation
 
 class ExternalReader {
   /// The working directory used to launch the executable.
-  @Since { version = "0.31.0" }
+  @Since { version = "0.32.0" }
   workingDirectory: String
 }
 ----
@@ -89,11 +91,8 @@ A new property called `resolvedEvaluatorSettings` will be added to `pkl:Project`
 ----
 module pkl.Project
 
-@Since { version = "0.31.0" }
-fixed resolvedEvaluatorSettings =
-  (evaluatorSettings) {
-    baseUri = projectFileUri.substring(0, projectFileUri.lastIndexOf("/"))
-  }.resolved
+@Since { version = "0.32.0" }
+fixed resolvedEvaluatorSettings: EvaluatorSettingsModule = evaluatorSettings.resolve(projectFileUri)
 ----
 
 [[path-resolution]]
