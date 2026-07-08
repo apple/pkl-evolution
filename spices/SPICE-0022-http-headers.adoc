@@ -2,7 +2,8 @@
 
 * Proposal: link:./SPICE-0022-http-headers.adoc[SPICE-0022]
 * Author: link:https://github.com/kyokuping[kyokuping]
-* Status: Proposed
+* Status: Accepted
+* Implemented in: 0.32
 * Category: Language, Standard Library, Tooling
 
 == Introduction
