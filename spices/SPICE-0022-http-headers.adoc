@@ -49,11 +49,11 @@ class Http {
   // ... existing properties
 
   /// HTTP headers to add to outbound requests targeting specified URLs.
-  headers: Mapping<URLPattern, Mapping<HttpHeaderName, *Listing<String>|String>>?
+  headers: Mapping<String(isGlobPattern), HttpHeaders>?
 }
 ----
 
-The details for `URLPattern` and `HttpHeaderName` will be provided in the following sections.
+The details for `HttpHeaders` will be provided in the following sections.
 
 A new CLI flag, `--http-header`, will be introduced to allow specifying headers from the command line. The flag will accept key-value pairs in the format `<url-pattern>=<header-name>:<header-value>[,<header-name>:<header-value>...]`.
 
@@ -67,14 +67,32 @@ pkl eval \
 
 The HTTP client will be modified to check for matching header configurations for each outgoing request and add the corresponding headers.
 
-=== The `URLPattern` typealias
+=== The `HttpHeaders` typealias
 
-The `URLPattern` typealias defines glob patterns that are used to match the URLs of HTTP requests and determine which HTTP headers to apply.
+The `HttpHeaders` typealias is used to represent a mapping of <<header-name,header names>> to header value(s).
 
-To prevent accidental matches, the pattern should end with a slash (`/`) or a wildcard (`*`).
+[source,pkl]
+----
+/// A mapping of header names to header value(s).
+///
+/// The mapping must have distinct header keys (case insensitive).
+@Since { version = "0.32.0" }
+typealias HttpHeaders =
+  Mapping<HttpHeaderName, *Listing<HttpHeaderValue> | HttpHeaderValue>(
+    keys.toList().isDistinctBy((it) -> it.toLowerCase()),
+  )
 
-If several patterns match a given request URL, all matching patterns will be considered and their headers will be applied.
+/// An HTTP header value.
+///
+/// It consists of ASCII characters between the range of 0x20 - 0x7E, and 0x80 - 0xFF (all visible
+/// ASCII characters), and also the tab character.
+@Since { version = "0.32.0" }
+typealias HttpHeaderValue =
+  String(matches(Regex(#"[\t\u0020-\u007E\u0080-\u00FF]*"#)), length < 4096)
 
+----
+
+[[header-name]]
 === The `HttpHeaderName` typealias
 
 The `HttpHeaderName` typealias is used to represent the name of an HTTP header, defined as follows:
@@ -84,47 +102,48 @@ The `HttpHeaderName` typealias is used to represent the name of an HTTP header, 
 ----
 // Reserved HTTP header names that are inappropriate to be set by the user
 typealias ReservedHttpHeaderName =
-  "accept-charset"
-  | "accept-encoding"
-  | "access-control-request-headers"
-  | "access-control-request-method"
-  | "connection"
-  | "content-length"
-  | "cookie"
-  | "date"
-  | "dnt"
-  | "expect"
-  | "host"
-  | "keep-alive"
-  | "origin"
-  | "permissions-policy"
-  | "referer"
-  | "te"
-  | "trailer"
-  | "transfer-encoding"
-  | "upgrade"
-  | "via"
+  "connection"
+    | "content-length"
+    | "expect"
+    | "host"
+    | "keep-alive"
+    | "te"
+    | "trailer"
+    | "transfer-encoding"
+    | "upgrade"
 
-// Reserved HTTP header prefixes that are inappropriate to be set by the user
-const local ReservedHttpHeaderPrefix = new Listing {
-  "proxy-"
-  "sec-"
-  "access-control-"
-}
-const local hasReservedHttpHeaderPrefix = (header: String) ->
-  ReservedHttpHeaderPrefix.any((it) -> header.startsWith(it))
+local const reservedHttpHeaderPrefix =
+  Set(
+    "proxy-",
+    "sec-",
+  )
 
-// Regex for validating HTTP header names based on RFC 7230
-const local httpHeaderNameRegex = Regex("^[a-zA-Z0-9!#\\$%&'*+-.^_`|~]+$")
-const local hasValidHttpHeaderName = (header: String) ->
-    httpHeaderNameRegex.findMatchesIn(header)
+local const isNotReservedHeaderName = (header: String) ->
+  !(header.toLowerCase() is ReservedHttpHeaderName)
 
-typealias HttpHeaderName = String(
-  this == toLowerCase(), // Only accept lowercase header names
-  !(this is ReservedHttpHeaderName),
-  !hasReservedHttpHeaderPrefix.apply(this),
-  hasValidHttpHeaderName
-)
+local const doesNotStartWithReservedPrefix = (header: String) ->
+  !reservedHttpHeaderPrefix.any((it) -> header.toLowerCase().startsWith(it))
+
+local const hasValidHeaderNameSyntax = (header: String) ->
+  header.matches(Regex(#"[a-zA-Z0-9!#$%&'*+-.^_`|~]+"#))
+
+/// An HTTP header name.
+///
+/// It conforms to the following rules:
+///
+/// * It is not one of "connection", "keep-alive", "content-length", "expect", "host", "upgrade",
+///   "te", "transfer-encoding", "trailer" (case insensitive).
+/// * It does not start with "proxy-" nor "sec-".
+/// * It consists of a-z, A-Z, or a character in "!#$%&'*+-.^_`|~".
+/// * It is not a blank string.
+@Since { version = "0.32.0" }
+typealias HttpHeaderName =
+  String(
+    isNotReservedHeaderName,
+    doesNotStartWithReservedPrefix,
+    hasValidHeaderNameSyntax,
+    isNotBlank,
+  )
 ----
 
 == Compatibility
