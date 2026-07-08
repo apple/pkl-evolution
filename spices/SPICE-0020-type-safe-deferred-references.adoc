@@ -1,0 +1,502 @@
+= Type-safe Deferred References
+
+* Proposal: link:./SPICE-0020-type-safe-deferred-references.adoc[SPICE-0020]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: Accepted
+* Implemented in: Pkl 0.32
+* Category: Language, Standard Library, Tooling
+
+== Introduction
+
+Deferred references provide a type-safe way to represent references to values that are not known at evaluation time.
+
+== Motivation
+
+Configurations written in Pkl sometimes represent values that do not exist at evaluation time, but where the type of the value is known.
+This often happens when configurations represent a sequence or directed acyclic graph (DAG) where data can be passed between nodes.
+In Pkl today, representing these relationships is challenging or limiting: either write a ton of boilerplate code or fall back to an un-validated representation for references.
+
+References aim to close this gap by providing the same fidelity of type checking and IDE experience Pkl users are accustomed to when working with references to values not known at time of evaluation.
+
+Here are some specific use cases where references stand to have a large positive impact:
+
+=== Infrastructure as code systems
+
+Infrastructure as Code (IaC) tools like Pulumi and Terraform manage resources in remote systems.
+These tools model resources as a graph defining the order in which Create, Read, Update, and Delete (CRUD) operations are carried out.
+Users can explicitly define this graph by declaring dependencies between resources or implicitly by introducing a data dependency.
+Data dependencies exist when a resource's "output"—information that may only be known after the resource is actually created in the target system (eg. a unique identifier)—is referenced as an "input" to another resource.
+
+The inputs and outputs of a resource are typically strongly typed; these tools know that a particular resource's `id` output is a string and some other resource's `parentId` field accepts a string and when a data dependency is present the types are validated by the runtime.
+When representing these references in static formats like JSON or YAML, these tools opt to represent these references as strings containing some tool-specific expression syntax.
+
+In Pulumi's YAML runtime the `${<expr>}` syntax is used for this purpose
+A simple example of a data dependency might look like this:
+[source,yaml]
+----
+name: webserver
+runtime: yaml
+resources:
+  allow_http:
+    type: myCloud:FirewallRule
+    properties:
+      ingress:
+      - protocol: tcp
+        fromPort: 80
+        toPort: 80
+        cidrBlocks: [0.0.0.0/0]
+  web_server:
+    type: myCloud:Instance
+    properties:
+      instanceSize: small
+      image: my-image-id
+      userData: |-
+          #!/bin/bash
+          echo 'Hello, World from ${FirewallRule.uuid}!' > index.html
+          nohup python -m SimpleHTTPServer 80 &
+      firewallRuleIds:
+        - ${FirewallRule}
+----
+
+It's also possible to represent this same program in Pkl:
+[source,pkl]
+----
+resources {
+  firewallRules {
+    ["allow_http"] {
+      properties {
+        ingress {
+          new {
+            protocol = "tcp"
+            fromPort = 80
+            toPort = 80
+            cidrBlocks { "0.0.0.0/0" }
+          }
+        }
+      }
+    }
+  }
+  instances {
+    ["web_server"] {
+      properties {
+        instanceSize = "small"
+        image = "my-image-id"
+        userData =
+          """
+          #!/bin/bash
+          echo 'Hello, World from ${FirewallRule.uuid}!' > index.html
+          nohup python -m SimpleHTTPServer 80 &
+          """
+        firewallRuleIds {
+          "${FirewallRule}"
+        }
+      }
+    }
+  }
+}
+----
+
+In this Pkl code, these reference expressions are represented exactly how they are in the original YAML: as opaque, un-typed, un-validated, and un-autocompleted strings.
+While Pulumi does its own validation of these expressions, any errors reported won't be able to refer back to the original line of Pkl where the error occurred.
+This leads to a sub-par user experience, especially when contrasted against the developer experience Pkl provides for the rest of the code.
+
+=== Continuous integration systems
+
+Continuous integration (CI) systems provide a way to define tasks that run in response to various software development lifecycle events.
+Many CI systems define workflows consisting of tasks that depend on one another.
+Some CI systems provide a way to pass typed data between tasks.
+Like with IaC tools, these references are most often implemented as specially formatted strings and have the same downsides: no editor completion or diagnostics and no type checking before runtime.
+
+=== And more?
+
+References are an advanced API design tool with no known precedent in other configuration languages.
+The design outlined here was created with the above use cases in mind, it's very likely that there are yet-unknown applications for this feature!
+
+== Proposed Solution
+
+A new standard library module `pkl.ref` will be added to contain reference functionality.
+The primary API in this module is the `Reference<D, T>` class.
+
+References consist of four parts:
+
+* Domain - An instance of a subclass of the `pkl.ref` module's `Domain` class.
+A domain determines which `Reference` instances are compatible and how they are rendered as strings.
+The domain of a `Reference` may be retrieved using its `getDomain()` method.
+* Data - An arbitrary value that may contain domain-specific information about the referenced value.
+The data of a `Reference` may be retrieved using its `getData()` method.
+* Path - A `List` of `ref.Access` values indicating how the reference was accessed (by property or subscript).
+The path of a `Reference` may be retrieved using its `getPath()` method.
+* Referent type - The type of the value that the reference refers to.
+
+**Member Access**
+
+The key feature of a `Reference` is that it inherits properties and subscript behavior from its `T` type argument. Given the following declaration:
+
+[source,pkl]
+----
+class Bird { name: String }
+----
+
+A `Reference<MyDomain, Bird>` will contain synthetic property `name: Reference<MyDomain, String>`.
+
+The synthesized reference contains the same domain and data as the original reference.
+This reference's path extends the original reference's with an `Access` instance describing the accessed property name or subscript key.
+
+**Union Types**
+
+When a reference's referent type is a union, only member access that is valid for all elements of the union type is allowed on the reference. Given the following declarations:
+
+[source,pkl]
+----
+class Bird {
+  name: String
+  wingspanMeters: Float
+}
+
+class Mammal {
+  name: String
+  legCount: UInt
+}
+----
+
+A `Reference<MyDomain, Bird | Mammal>` will contain only synthetic property `name: Reference<MyDomain, String>`.
+Attempting to access the `wingspanMeters` or `legCount` properties would result in an error.
+
+**Limitations**
+
+. Properties with the `external` modifier may not be accessed.
+. Properties defined inside external classes may not be accessed.
+. The `Listing.default`, `Mapping.default`, and `Dynamic.default` properties may not be
+   accessed.
+. Constrained types cannot be referent types.
+** Declaring `Reference<MyDomain, String(length.isOdd)>` will throw an error.
+** Member access will return a new reference whose referent type has its constraints erased.
+
+**Construction**
+
+`Reference` instances are created with the constructor method of the same name.
+This method accepts three parameters:
+
+* `domain` - An instance of a `ref.Domain` subclass; its type becomes the `D` type argument of the resulting `Reference` instance.
+* `class` - A `Class` instance that will be the referent type of the returned `Reference`; it is the `T` type argument of the resulting instance.
+* `data` - A domain-specific value used to identify the root or context of the reference.
+
+== Detailed design
+
+=== Pkl API
+
+All Pkl API changes are encompassed in the new standard library module `pkl.ref` (URI `pkl:ref`).
+
+==== `Reference` class
+
+The core `Reference` type.
+This type exposes the core details of a reference, sans the referent type (which cannot be represented in Pkl without reflection).
+Getter-style methods are used instead of properties to avoid ambiguities between the properties of `Reference` and "proxied" properties of its referent type.
+
+`Reference` also overrides the `toString()` method, delegating the type's string representation to its <<domain-class,domain>>.
+
+[source,pkl]
+----
+external class Reference<out D, out T> {
+  external function getDomain(): D
+  external function getData(): Any
+  external function getPath(): List<Access>
+  function toString(): String = getDomain().renderReference(this)
+}
+----
+
+[[pcfrenderer-limitation]]
+`Reference` instances can be rendered natively by `pkl.pklbinary#Renderer`, but no other built-in renderer supports rendering `Reference` values without a converter.
+Ideally, `PcfRenderer` would support rendering references, but there are some challenges involved, downstream of Pcf's goal of being valid Pkl syntax:
+
+* The `Reference` constructor is not in the `pkl.base` module like the other types Pcf renders as constructor calls.
+* The constructor currently requires passing a `Class` value, which cannot be rendered as Pcf without a converter.
+* If/when Pkl gains <<reified-types, reified types>> and the `Reference` constructor adopts them, it's not clear how these values should be treated in Pcf.
+
+==== `Reference` constructor method
+
+The entrypoint for creating `Reference` values.
+This method requires a `domain` object (an instance of a subclass of <<domain-class,`Domain`>>), a `class` that becomes the initial referent type, and an arbitrary `data` value.
+
+[source,pkl]
+----
+external const function Reference<D, T>(
+  domain: D(this is Domain),
+  `class`: Class<T>,
+  data: Any,
+): Reference<D, T>
+----
+
+[[construction-class-type-limitation]]
+NOTE: only class types may be used to create an initial reference.
+This is a restriction of the language at the current time.
+Ideally <<reified-types,reified types>> could be used instead to eliminate this restriction.
+
+[[domain-class]]
+==== `Domain` abstract class
+
+The base class for all reference domains.
+`Reference` instances must share a domain type to be inter-compatible.
+Domain subclasses also provide the logic for rendering `Reference` instances as strings, either via `Reference.toString()` or string interpolation, by overriding the `renderReference()` method.
+
+[source,pkl]
+----
+abstract class Domain {
+  abstract function renderReference(reference: Reference<Domain, Any>): String
+}
+----
+
+Note that `Domain.renderReference()` _does not_ affect any `BaseValueRenderer` output by default.
+To render references as strings in module output, explicitly adding a converter to the renderer is required:
+
+[source,pkl]
+----
+output {
+  renderer {
+    converters {
+      [ref.Reference] = (it) -> it.toString()
+    }
+  }
+}
+----
+
+==== `Access` class
+
+One element of `Reference.getPath()`, denoting how a reference has been accessed.
+If representing a property access, `property` will be non-null and `key` will be null.
+If representing a subscript access, `property` will be null; `key` may still be null, representing the use of a null value as the subscript key.
+
+[source,pkl]
+----
+class Access {
+  fixed isProperty: Boolean = property != null
+  fixed isSubscript: Boolean = property == null
+  property: String(key == null)?
+  key: Any
+}
+----
+
+
+=== Java API
+
+These Java APIs will be changed or added in pkl-core:
+
+* `org.pkl.core.Reference` - New class implementing `Value`, corresponding to in-language `Reference` type
+* `org.pkl.core.PClassInfo`
+** Add static property `pklRefUri`
+** Add static property `Reference`
+* `org.pkl.core.PType` - subclasses now implement `toString()` to render the type as it would be in Pkl
+* `org.pkl.core.PClass`
+** New constructor parameter `@Nullable PClass moduleClass`
+** Add method `getModuleClass`
+* `org.pkl.core.TypeAlias`
+** New constructor parameter `PClass moduleClass`
+** Add method `getModuleClass`
+** Add method `isSubclassOf`
+* `org.pkl.core.ValueConverter`
+** Add method `convertReference`
+* `org.pkl.core.ValueVisitor`
+** Add method `visitReference`
+
+=== Binary Encoding and Language Bindings
+
+The `pkl-binary` encoding specification will be expanded to include a new value type:
+
+|===
+|Pkl type |Slot 1 2+|Slot 2 2+|Slot 3 2+|Slot 4
+
+||code |type |description |type |description |type |description
+
+|`Reference`
+|`0x20`
+|`<value>` (Typed)
+|Domain
+|`<value>`
+|Data
+|`array`
+|Array of Typed (`pkl.ref#Access`) values
+
+|===
+
+Accordingly, pkl-go and pkl-swift will each gain types corresponding to `Reference` and `Access`.
+
+=== Editor Tools
+
+Support for references will be added to pkl-lsp and pkl-intellij.
+
+Tooling will support:
+
+* Type checking of `Reference` values
+* Auto-completion of `Reference` property access
+* Rudimentary hover documentation for variables of type `Reference`
+* Diagnostic error:
+** When accessing a `Reference` property known to not exist on the referent type.
+** When subscripting a `Reference` with a key not supported by the referent type.
+** When using a type constraint in the referent (second) type argument of a `Reference` type annotation.
+
+== Compatibility
+
+This proposal is additive and will not affect existing code.
+Pkl modules that adopt `Reference` will not be compatible with prior versions of Pkl.
+
+== Release as Experimental
+
+References are targeted for release as-proposed with Pkl 0.32 in an "experimental" state.
+This means that the API and semantics of references may change in a future release; the feature's documentation will note this prominently.
+
+We have opted for this approach for a few reasons:
+
+* The feature is novel and complex, so we wish to allow libraries authors considering adoption opportunity to test the feature and provide feedback before we guarantee compatibility.
+* We wish to remove the <<construction-class-type-limitation,limitation that references may only be constructed with simple class types>> before a stable release.
+* <<pcfrenderer-limitation,`PcfRenderer` cannot render `Reference` values>> currently and we would like to remove this limitation.
+
+== Future directions
+
+Many future directions for references are tied up in other language features that would stand to make references more expressive and/or easier to use.
+
+[[reified-types]]
+=== Reified types
+
+Currently, creation of new references is limited to referents with non-generic class types.
+To refer to a value of another kind of type (generic, nullable, union, typealias, etc.), it's necessary to use a "holder" class as an intermediary:
+
+[source,pkl]
+----
+r = ref.Reference(myDomain, TypeHolder, data).$
+
+class TypeHolder {
+  $: Listing<String> // for example
+}
+----
+
+Ideally, this restriction would not exist and the cruft of ignore the `$` property access could be omitted.
+Instead, Pkl would adopt a Kotlin-like approach for handling reified type arguments:
+
+[source,pkl]
+----
+// in pkl.ref
+external const function Reference<D, reified T>(
+  domain: D(this is Domain),
+  data: Any,
+): Reference<D, T>
+
+// usage
+r = ref.Reference<MyDomain, Listing<String>>(myDomain, <data>)
+----
+
+This implementation might pass the `TypeNode` of the specified `T` type through as a sugared method parameter.
+
+An alternative approach would be to make types a first-class value in the language:
+
+[source,pkl]
+----
+// in pkl.ref
+external const function Reference<D, T>(
+  domain: D(this is Domain),
+  type: T.Type
+  data: Any,
+): Reference<D, T>
+
+// usage may take a few forms:
+// swift-like
+r = ref.Reference<MyDomain, Listing<String>>(myDomain, Listing<String>.self, <data>)
+// a typeOf() operator
+r = ref.Reference<MyDomain, Listing<String>>(myDomain, typeOf(Listing<String>), <data>)
+// or maybe something else entirely!
+----
+
+=== `this` as a self type
+
+Pkl currently has a self type for modules (written `module`), but https://github.com/apple/pkl/issues/1612[does not have equivalent for classes].
+Having a self type for regular classes would improve the usability of references.
+The primary location is `Domain.renderReference()` which could instead be defined as:
+
+[source,pkl]
+----
+abstract function renderReference(reference: Reference<this, Any>): String
+----
+
+=== Custom string interpolation
+
+There may be cases in which a target system cannot simply render a `Reference` as a string to be interpolated within a larger string.
+
+=== Generic methods
+
+It's likely that library authors will define type aliases for references in that library's domain(s):
+
+[source,pkl]
+----
+import "pkl:ref"
+
+class MyDomain extends ref.Domain {
+  // ...
+}
+
+typealias Ref<T> = ref.Reference<MyDomain, T>
+----
+
+This is a nice little usability benefit, but the same does not extend to constructing references.
+Attempting to wrap the `ref.Reference()` constructor erases the generic type argument, making references significantly less useful.
+
+Allowing user modules to define generic methods would allow library authors to provide a nicer experience for constructing references:
+
+[source,pkl]
+----
+function makeRef<T>(`class`: Class<T>, data: Any): Ref<T> =
+  ref.Reference(myDomain, `class`, data)
+
+// OR, if paired with a reified type parameter:
+function makeRef<reified T>(data: Any): Ref<T> =
+  ref.Reference<MyDomain, T>(data)
+----
+
+=== Generic types
+
+Similarly, supporting user generic classes would make some other reference usages much nicer.
+One example of this is providing globally referencable values, which is fairly common in systems that support references (e.g. Pulumi, GitHub Actions).
+
+Here's an example of where user generics can provide fluent DSLs:
+
+[source,pkl]
+----
+env: Mapping<String, String | *Expression<String>>
+
+class Expression<T> extends GlobalContextValues {
+  $: Ref<T>
+}
+
+open class GlobalContextValues {
+  $global: Ref<GlobalContext>
+}
+
+abstract class GlobalContext {
+  gitRef: String
+}
+----
+
+Usage:
+
+[source,pkl]
+----
+env {
+  ["FOO"] = "constant value"
+  ["BAR"] { $ = $global.gitRef }
+}
+----
+
+Here, the `Expression` class defines referencable context that can be accessed (implicitly as a property of `this`) when setting the `$` property.
+This makes it a) abundantly clear when an expression is in use, and b) reduces boilerplate like accessing `$global` via `module` or an import.
+
+== Alternatives considered
+
+=== Constraint Handling
+
+As proposed, `Reference` avoids dealing with constrained types in all cases:
+
+* When referencing a value with a constrained type, all constraints are stripped.
+* When annotating a type, it is an error for the annotated referent type to contain any constraint.
+
+These actions are safe because it preserves the subtype relationship in all cases: if a referent `Foo` has constraints and is a subtype of `Bar` (which contains no constraints), then after stripping those constraints the resulting type `Foo'` will still be a subtype of `Bar`.
+
+General support for removing these restrictions—if possible at all—would require a remarkably complex constraint/proof solver, which is out of scope for this feature and likely for Pkl as a whole.
+If such an implementation ever manifested, removing these restrictions would be a source-compatible change.
