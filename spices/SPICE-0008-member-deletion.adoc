@@ -1,0 +1,469 @@
+= Member deletion
+
+* Proposal: link:./SPICE-0008-member-deletion.adoc[SPICE-0008]
+* Status: TBD
+* Implemented in: Pkl 0.27 ()
+* Category: Language
+
+== Introduction
+
+The deletion of object members (properties in ``Dynamic``s, elements, or entries) currently typically requires transforming objects to programming-optimized APIs (for example, `toMap()`), deleting the member, and transforming back.
+This SPICE introduces keyword `delete`, which allows the deletion of an object member from an object "directly," i.e. without such transformations.
+This proposal _only_ concerns the core language and has no implications for language bindings or other integrations.
+
+== Motivation
+
+[NOTE]
+====
+The examples in this proposal focus on ``Dynamic``s, because they are the only object type that can simultaneously contain properties, entries, and elements, making them the most complicated case impacted by this proposal.
+No further emphasis of ``Dynamic``s over ``Listing``s or ``Mapping``s is to be derived from this focus.
+Indeed, ``Listing``s and ``Mapping``s are the foreseen predominant use-cases for this proposal.
+====
+
+When amending a module that contains ``Dynamic``s, ``Listing``s, and/or ``Mapping``s, changing or adding members (properties, elements, or entries) in those is straightforward.
+For example, consider `base.pkl` containing the following definition.
+
+[source,pkl]
+----
+prop: Dynamic = new {
+  foo = this["bar"] // <1>
+  42 // <2>
+  bar = false // <3>
+  ["bar"] = "baz" // <3>
+}
+----
+<1> Property referring to entry `"bar"`
+<2> `Number` valued element
+<3> Property and entry with the same name, respectively key.
+
+Now consider `amending.pkl` defined as follows.
+
+[source,pkl]
+----
+amends "base.pkl"
+
+prop {
+  [0] = super[0] - 14 // <1>
+  496 // <2>
+  ["qux"] = bar // <3>
+  quux = false // <4>
+}
+----
+<1> Amending an existing element
+<2> Adding a new element
+<3> Adding a new entry referring to property `bar`
+<4> Adding a new property
+
+Evaluating `amending.pkl` renders the following result.
+
+[source,pkl]
+----
+prop {
+  foo = "baz"
+  bar = false
+  ["bar"] = "baz"
+  28
+  quux = false
+  ["qux"] = false
+  496
+}
+----
+
+Amending existing members or adding new ones is straightforward.
+Deleting members, however, is not.
+If, in the above example, the entry `"baz"` should be deleted, there is no "direct" way of doing so.
+Instead, `prop` would first need to be converted to a `Map`, then `"baz"` would be removed, and finally the resulting `Map` would be converted back to a `Dynamic`;
+
+[source,pkl]
+----
+amends "base.pkl"
+
+prop = (super.prop.toMap().remove("foo").toDynamic()) {
+  [0] = super[0] - 14 // <1>
+  496
+  ["qux"] = bar
+  quux = false
+}
+----
+<1> No longer amends anything (see below)
+
+Evaluating this adjusted `amending.pkl` renders the following result.
+
+[source,pkl]
+----
+prop { // <1>
+  bar = "baz" // <2>
+  quux = false
+  496
+  ["qux"] = "baz" // <2>
+}
+----
+<1> There is no more element `28`.
+<2> Entry `"bar"` has been transformed into property `bar`, the original `bar` property has been discarded, and entry `"qux"` now refers to the new `bar` property.
+
+Besides being cumbersome, this method has multiple additional issues:
+
+1. When a `Dynamic` has a property with the same name as a `String`-keyed entry, `toMap()` retains the entry and drops the property.
+2. Regardless of overlap, when transforming back `toDynamic()`, all members that were previously _properties_ or _entries_ now become _properties_.
+3. Members defined lazily, in terms of other members, lose this late-bound relationship, because `toMap()` forces the evaluation of all properties and entries to _values_ (instead of late-bound expressions).
+4. Changing to and from a `Map` discards the existing order of the object members; the _properties_ in `super.prop` are grouped at the start, followed by the _entries_ of `super.prop`.
+5. This approach discards all _elements_ in `super.prop`.
+
+That last point about the loss of elements is not easily worked around and has some further consequences.
+The object member `[0] = super[0] - 14` no longer has an existing element to amend, so it is ignored entirely.
+Explicitly spreading the elements of `super.prop` into this new `Dynamic` would cause this expression to trigger a ``Duplicate definition of member `0``` error.
+
+``Listing``s and ``Mapping``s only have _elements_, respectively, _entries_, whose order is preserved when transformed `toList()`, respectively, `toMap()`, so they only suffer from issue 3 and the cumbersome formulation.
+
+== Proposed Solution
+
+A new keyword, `delete`, is introduced to the language.
+This keyword can be used in the expression position of an assignment-style object member specification.
+
+With this new keyword, `amending.pkl` from the <<Motivation>> can be reformulated as follows.
+
+[source,pkl]
+----
+amends "base.pkl"
+
+prop {
+  [0] = super[0] - 14
+  496
+  ["quux"] = foo
+  ["baz"] = delete // <1>
+  grault = false
+}
+----
+<1> "Assigning" `delete` to the entry `"baz"` removes it from `prop`.
+
+The intended evaluation result is the following.
+
+[source,pkl]
+----
+prop {
+  bar = false
+  ["bar"] = "baz"
+  28
+  quux = false
+  ["qux"] = false
+  496
+}
+----
+
+This solution provides improved ergonomics, keeps entries and properties separate, and preserves late-boundness, member order, and elements.
+
+Note, that trying to `delete` a property from a `Typed` object constitutes an error.
+
+== Detailed design
+
+The solution changes the grammar as follows:
+
+- `delete` is promoted from a `reservedKeyword` to a lexer token.
+- The grammar rule for `objectMember` is changed by adding `'delete'` as an alternative to `expr` in the `objectProperty`, `memberPredicate`, and `objectEntry` clauses, as shown below.
+In the `objectProperty` case, `modifier*` must be empty.
+
+[source,antlr]
+----
+objectMember
+  : modifier* Identifier (typeAnnotation? '=' (v=expr | d='delete') | objectBody+) # objectProperty
+  | methodHeader '=' expr                                                          # objectMethod
+  | t='[[' k=expr err1=']'? err2=']'? ('=' (v=expr | d='delete') | objectBody+)    # memberPredicate
+  | t='[' k=expr err1=']'? err2=']'? ('=' (v=expr | d='delete') | objectBody+)     # objectEntry
+  | expr                                                                           # objectElement
+  | ('...' | '...?') expr                                                          # objectSpread
+  | 'when' '(' e=expr err=')'? (b1=objectBody ('else' b2=objectBody)?)             # whenGenerator
+  | 'for' '(' t1=parameter (',' t2=parameter)? 'in' e=expr err=')'? objectBody     # forGenerator
+  ;
+----
+
+Deletion has implications for indices of elements.
+When an element is deleted, all consecutive elements shift forward.
+In other words, when deleting element `i` any element at index `j` (where `j` > `i`) moves to index `j - 1`.
+This affects any hard-coded index-based references.
+Consider the following example.
+
+[source,pkl]
+----
+original = new {
+  "foo"
+  false
+  this[0]
+}
+
+amended = (original) {
+  [0] = delete
+}
+----
+
+Evaluating this produces the following result.
+
+[source,pkl]
+----
+original {
+  "foo"
+  false
+  "foo"
+}
+amended {
+  false
+  false
+}
+----
+
+This behavior is consistent with the existing behavior for amending elements.
+If, instead of `[0] = delete`, `amended` would include `[0] = 42`, the expected result is as follows.
+
+[source,pkl]
+----
+original {
+  "foo"
+  false
+  "foo"
+}
+amended {
+  42
+  false
+  42
+}
+----
+
+Hard-coded index references mean that amending can introduce stack-overflows or "cannot find key" errors.
+Since elements are re-evaluated in amending, this does _not_ affect index references stemming from the object's `default` function:
+
+[source,pkl]
+----
+originalWithDefault = new {
+  local self = this
+  default = (i) -> new Dynamic { value = if (i == 0) 1 else self[i-1].value * 2 }
+  new {}
+  new {}
+  trace(new {}) // <1>
+}
+
+amendedWithDefault = (originalWithDefault) {
+  [1] = delete
+}
+----
+<1> `trace` demonstrates re-evaluation
+
+Evaluating this produces:
+
+[source,pkl]
+----
+pkl: TRACE: new {} = new Dynamic { value = 4 } (file:///path/to/demo.pkl, line 6)
+pkl: TRACE: new {} = new Dynamic { value = 2 } (file:///path/to/demo.pkl, line 6) // <1>
+originalWithDefault {
+  new {
+    value = 1
+  }
+  new {
+    value = 2
+  }
+  new {
+    value = 4
+  }
+}
+amendedWithDefault {
+  new {
+    value = 1
+  }
+  new {
+    value = 2
+  }
+}
+----
+<1> The second `TRACE` demonstrates re-evaluation of `originalWithDefault[2]` in the evaluation of `amendedWithDefault`.
+
+=== Definition keys vs reference keys
+
+Because of the renaming of elements under deletion, there is now a difference between keys used in the _definition_ of an object and in _referencing_ members of said object.
+The following code, for example, should result in `result = "expected"`:
+
+[source,pkl]
+----
+result = (new Listing {
+  "foo"
+  "bar"
+}) {
+  [0] = delete
+  [1] = "expected"
+}[0]
+----
+
+Notice how `[1] = "expected"` is used in the definition, but how `[0] = delete` implies the `1 -> 0` rename, so that subscripting with `[0]` produces `"expected"`.
+In this example, `1` is the _definition_ key of the `"expected"` element, whereas `0` is the _reference_ key.
+
+The implementation of deletion must provide translations from reference keys to definition keys and vice versa.
+This means any (valid / existing) reference key can be translated to a corresponding definition key.
+The reverse, however, does not hold.
+In the example above, translating definition key `1` to a reference key must result in `null`.
+
+=== Implementation in the interpreter
+
+Deletions happen on ``VmObject``s.
+When objects are defined with `for`/`when` generators or with member predicates, these are evaluated before the corresponding `VmObject` is instantiated.
+Therefore, ``VmObject``s are instantiated with a fully enumerated set of members (`UnmodifiableEconomicMap<Object, ObjectMember> members`).
+
+There are three places where deletion must be implemented; `VmObject::iterateMembers`, `VmObject::force`, and `VmUtils::readMemberOrNull`.
+That's because these are the only places that trigger evaluation (and everything else uses one or more of these three).
+For the below discussion of the implementation, consider the following example:
+
+
+[source,pkl]
+----
+source = new Dynamic {
+  "element zero"
+  "element one"
+  "element two"
+  "element three"
+  "element four"
+  "element five"
+  ["entry zero"] = "foo"
+  ["entry one"] = "bar"
+  ["entry two"] = "baz"
+}
+
+deleteByMemberPredicate = (source) {
+  [[contains("r")]] = delete // <1>
+}
+
+deleteByLiteralKey = (deleteByMemberPredicate) {
+  [1] = delete // <2>
+}
+----
+<1> Deletes keys `0`, `3`, `4`, and `"entry one"` from `source`.
+<2> Deletes key `1` from `deleteByMemberPredicate`, corresponding to original key `2` in `source`.
+
+Although this example uses _amends expressions_, the behavior is the same as when the amends chain is distributed across modules.
+
+==== `VmObject::iterateMembers`
+
+`VmObject::iterateMembers` iterates all members of an object, starting from the greatest grandparent in the amends chain.
+In other words, if an object has a `parent`, `iterateMembers` _first_ recurses to that parent, before iterating all members of the child.
+When `iterateMembers` is invoked on `deleteByLiteralKey`, this means it first visits all members in `source`.
+It follows that it visits members that are deleted in either `deleteByMemberPredicate` or `deleteByLiteralKey`.
+Also, it means that `"element five"` is first visited at key `5`, and later (in `deleteByMemberPredicate`) at `2`, and (in `deleteByLiteralKey`) at `1`.
+
+To avoid this, and to present the `consumer` passed to `iterateMembers` with a consistent view of the members, `iterateMembers` first translates a member key to its reference key (by tracking all its children's deletions).
+Doing this recursively would require every recursion to build an extended set of deletions, which would imply O(A) _sets_ to be kept, for amends chain length A.
+If, instead, we reformulate `iterateMembers` to be iterative, we can define a TODO list (the ancestry) of O(A) length (trading it for O(A) stack depth in the recursive formulation).
+Now, we can keep a single set of deletions, that is built up initially, when gathering the TODO list, and iteratively deconstructed while iterating that TODO list.
+
+When iterating any object in the ancestry, every key is checked against the deletion set.
+If the key is deleted in any of the object's descendents, it is not passed to the `consumer`.
+If the member corresponding to the key is an element and any "earlier" elements are deleted in any of the object's descendents, the key is renamed before it is passed to the `consumer`.
+This way, the `consumer` only sees members that "survive" in the descendent being iterated over, and it is presented with a consistent view of the keys.
+
+==== `VmObject::force`
+
+`VmObject::force` follows similar logic as `iterateMembers`, except that it traverses the ancestry from child to (grand) parent.
+This means it does not require an initial "gather" pass.
+Since `force` is already iterative, we only need to track deletions while iterating up the ancestry.
+
+==== `VmUtils::readMemberOrNull`
+
+Any call to `VmUtils::readMemberOrNull` uses the _reference key_ of the member to read.
+In its implementation, `readMemberOrNull` traverses the ancestry upwards from the child.
+By translating the reference key to the corresponding definition key at every level, it resolves the correct member in the defining ancestor.
+
+
+== Compatibility
+
+Since this proposal introduces a new language feature, using a new - previously reserved - keyword, no existing Pkl code is affected.
+There are no observable differences outside of the interpreter (in language bindings or other integrations) resulting from this proposal.
+
+== Future directions
+
+Discussions have been had about provenance tracing for debuggability.
+In such a tool, for any object member, the provenance of the resulting value can be deduced.
+Such a tool would require knowledge of the semantics of `delete`.
+Considering provenance tracing would most likely require deep integration with the interpreter, it is likely most or all of this requirement can be addressed by the interpreter.
+
+== Alternatives considered
+
+=== Do nothing
+
+This alternative has all the downsides stipulated in the <<Motivation>>.
+It also has performance implications, because even simple deletions require `toMap()`/`toList()` and the corresponding backward transformation.
+We have also observed definitions using `List` and `Map`, instead of `Listing` and `Mapping`, to avoid these transformations, thereby degrading the user experience of the template.
+
+=== Preserving indices of elements
+
+Instead of letting indices shift, elements could be marked as deleted "in place."
+This alternative has at least one of the following two downsides:
+
+- Indices become non-contiguous, meaning that the object's elements can no longer be consumed by iterating over `IntSeq(0, object.length() - 1)`.
+- A representation for deleted elements is required for all consumers (renderers, object mappers in language bindings, etc).
+
+The benefit of this alternative is that index references are more stable.
+Although this reduces potential surprise due to non-existing elements or unwanted circular references, it is inconsistent with the existing (and remaining) surprise when an element is amended in an incompatible way.
+As an example, if an element (`[i] = true`) is referred to in a condition (`if (obj[i]) 42 else 0`), amending it to a different type (`(obj) { [i] = -1 }`) causes an error when the condition is evaluated.
+
+=== Methods
+
+Instead of a keyword, the `Dynamic`, `Listing`, and `Mapping` classes could be given methods to allow deletion;
+
+- `Dynamic`:
+    - `deleteProperty(name: String): Dynamic`
+    - `deleteEntry(key: Any): Dynamic`
+    - `deleteElement(key: Int): Dynamic`
+- `Mapping<out Key, out Value>`:
+    - `deleteEntry(key: Any): Mapping<Key, Value>`
+- `Listing<out Element>`:
+    - `deleteElement(key: Int): Listing<Element>`
+
+This takes away the need for a keyword and the associated semantics in the interpreter.
+However, this alternative is less expressive/scalable, and less (notationally) idiomatic.
+
+Without the ability to delete by member-predicate (`[[condition(this)]] = delete`), either we must define further methods (for example, `deleteEntriesWhere(condition: (Value) -> Boolean): Mapping<Key, Value>`), or resort to more cumbersome expressions as before;
+
+[source,pkl]
+----
+prop = super.prop.toList().filter(condition).fold(super.prop, (acc, it) -> acc.deleteElement(it))
+----
+
+Even for "simple" deletions means property amending notation is no longer available.
+Instead, an explicit expression is required:
+
+[source,pkl]
+----
+prop = super.prop.deleteProperty("foo")
+----
+
+=== Syntax: `delete` as prefix operator
+
+The proposed syntax makes deletion a similar sort of change of an object member as overwriting.
+It could be argued that it is a different sort of change, warranting a clearer syntactic emphasis.
+Instead of the syntax used in this SPICE, the following syntax was considered:
+
+[source,pkl]
+----
+prop {
+  delete ["entry"] // <1>
+  delete 0 // <2>
+  delete prop // <3>
+  delete [[foo == 10]] // <4>
+}
+----
+<1> Deleting an entry by key
+<2> Deleting an element by index
+<3> Deleting a property by name
+<4> Deleting members by predicate
+
+This notation comes with its own downsides:
+
+1. Prior to this SPICE, someone reading an amends block can scan the left-most column of the block to find all members affected by it.
+  This alternative syntax undoes that.
+2. The element deletion in the above example (`delete 0`) is a slight variation (where consistency with entry keys would require square brackets also), illustrating more such variations can exist and reasonably be presumed by users.
+  This suggests a higher risks of misunderstanding syntactical elements and/or less discoverability.
+3. The syntax for deleting a property (`delete prop`) and that for deleting an element (`delete 0`) suggest the argument to `delete` to be an expression, in which case `prop` should be evaluated and replaced by its value.
+  Indeed, this syntax does not (appear to) allow for property-defined indices to delete.
+
+Another alternative is to require square brackets around element indices.
+In this case, objection 1 from the above remains relevant as does most of objection 2 (but it addresses objection 3).
+
+
+
+== Acknowledgements
+
+Many thanks to Pkl's originator Peter Niederwieser and fellow maintainer Dan Chao for fruitful discussions on this topic.
