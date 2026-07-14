@@ -1,0 +1,210 @@
+= Self Type
+
+* Proposal: link:./SPICE-0029-self-type.adoc[SPICE-0029]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.33
+* Category: Language, Tooling
+
+== Introduction
+
+This SPICE proposes a new, general-use self type and refines the existing `module` self type.
+
+== Motivation
+
+Pkl currently has a self type, `module`, that is only applicable in specific situations.
+As a result, it's currently possible to express patterns using modules that cannot be expressed by normal classes.
+
+The `module` type also means different things at the module level vs. inside a class or typealias body, which can be confusing.
+
+== Proposed Solution
+
+A new type `this` will be added that serves as a self type in both module and class contexts.
+
+== Detailed design
+
+Pkl's parsers will be updated to recognize `this` in type positions.
+Similarly, pkl-intellij and pkl-lsp (incl. tree-sitter-pkl) will be updated to parse and resolve `this` as a type.
+
+=== Prior Art & Naming
+
+Several other languages provide a self type and write it in different ways:
+
+* Swift: `Self`
+* Rust: `Self`
+* TypeScript: `this`
+* Python: `Self`
+* Zig: `@This()` (often aliased to `Self` via `const Self = @This()`)
+
+Swift, Rust, and Python have a `self`/`Self` distinction: `self` talks about the instance, and `Self` talks about the type.
+
+This SPICE opts to write Pkl's self type as `this` for a few reasons:
+
+* Its casing aligns with Pkl's existing keyword types (`module`, `unknown`, `nothing`).
+* Using `this` avoids allocating a new keyword, which is a breaking change for code using that name as an identifier.
+** Choosing `self` is particularly problematic as it's common in "scope capture" scenarios often written as `local self = this`.
+* Using `this` to mean a type or a value depending on context matches the existing behavior for `module`.
+
+=== Semantics
+
+The `this` type is an alias for the class of the current receiver (`this` value).
+For open classes, `this` admits values whose class is a subclass of the receiver.
+
+[source,pkl]
+----
+open class A {
+  x: Int
+
+  function foo(bar: this): this = (this) {
+    x = super.x + bar.x
+  }
+}
+
+class B extends A
+
+local a: A = new { x = 1 }
+local b: B = new { x = 2 }
+
+res1 = a.foo(a) // <1>
+res2 = a.foo(b) // <2>
+res3 = b.foo(a) // <3>
+res4 = b.foo(b) // <4>
+----
+<1> Result: `new A { x = 2 }`
+<2> Result: `new A { x = 3 }`
+<3> Evaluation error: ``Expected value of type \`B`, but got type \`A`.``
+<4> Result: `new B { x = 3 }`
+
+[NOTE]
+====
+Similar to the `this` expression, the `this` type resolves to the type of the visibly outer receiver when used in member predicates and `when` generators:
+
+[source,pkl]
+----
+local foo: Listing = new {
+  new Listing { "hello" }
+  new Mapping { ["hello"] = "world" }
+  module
+}
+
+bar = (foo) {
+  [[this is this]] { // <1>
+    res2 = "blah"
+  }
+  when (module is this) { // <2>
+    true
+  }
+  module is this // <3>
+}
+----
+<1> Matches `foo[2]`. `this` resolves to the type of the outer (module) scope.
+<2> Result: `true`. `this` resolves to the type of the outer (module) scope.
+<3> Result: `false`. `this` resolves to the type of the current scope (`Listing`).
+====
+
+[source,pkl]
+----
+foo: List(any((it) -> it is this)) // <1>
+
+bar: Listing
+baz: Listing = (bar) {
+  [[this is this]] { // <2>
+    new { "foo" }
+  }
+}
+----
+<1> Type `this` refers to the type of the module, which is the current lexical scope.
+<2> Value `this` refers to the
+
+
+=== Usage Restrictions
+
+A self type is not compatible with typealiases.
+A typealias is meant be "static"; an extending module does not change the meaning of a typealias (see link:./SPICE-0007-const-checks-in-typealiases.adoc[SPICE-0007]).
+On the other hand, the `this` type always refers to the type of the extending module.
+Because of this, the `this` type cannot be used inside typealias bodies:
+
+[source,pkl]
+----
+typealias Foo = Listing<this> // <1>
+
+typealias Bar<T> = Listing<T>
+qux: Bar<module> // <2>
+----
+<1> Use of the `this` type in a typealias body. Error: ``\`this` type annotations are not allowed in type alias bodies.``
+<2> Use of the `this` type at the module level as a type argument to a typealias. No error.
+
+=== `module` Type Changes
+
+The `module` type has similar issues when used inside class bodies and typealias.
+New deprecation warnings for use of the `module` type in these contexts will be introduced in Pkl 0.33.
+These warnings will become evaluation errors in Pkl 0.34.
+
+[source,pkl]
+----
+open module foo
+
+typealias Bar = Listing<module> // <1>
+
+typealias Baz<T> = Listing<T>
+qux: Baz<module> // <2>
+
+class Quux extends module { // <3>
+  corge: Listing<module> // <4>
+}
+----
+<1> Use of the `module` type in a typealias body. Deprecated.
+<2> Use of the `module` type at the module level as a type argument to a typealias. _Not_ deprecated.
+<3> Use of the `module` type in a class `extends` clause. _Not_ deprecated.
+<4> Use of the `module` type in a class body. Deprecated.
+
+The warnings are logged similarly to use of methods with `@Deprecated` annotations:
+
+[source,terminaloutput]
+----
+pkl: WARN: `module` type annotations are not allowed in class bodies. This will be an error in a future release. (file:///path/to/file.pkl)
+pkl: WARN: `module` type annotations are not allowed in type alias bodies. This will be an error in a future release. (file:///path/to/file.pkl)
+----
+
+In most affected usages, the `module` type should be replaced with a self-import of the enclosing module.
+
+Matching diagnostics will be added to pkl-intellij and pkl-lsp highlighting these usages as warnings (and later errors).
+Tooling will also offer a quick-fix to replace usage with a self-import.
+
+=== Pkl API
+
+Only a couple Pkl API changes are directly required as part of adding the `this` type:
+
+* Add `pkl.reflect#ThisType`
+* Add `pkl.reflect#thisType`
+
+A couple more changes will be made to adopt the `this` type in existing APIs:
+
+* `Any.getClass()` will return `Class<this>` instead of just `Class`.
+** This allows removing special-cased workarounds from https://github.com/apple/pkl-intellij/pull/202[pkl-intellij] and https://github.com/apple/pkl-lsp/pull/188[pkl-lsp].
+* `Any.ifNonNull()` now accepts a `(this) -> Result` argument instead of just `(NonNull) -> Result`.
+* `pkl.ref#Domain.renderReference()` now accepts a `Reference<this, Any>` argument instead of `Reference<Domain, Any>`.
+
+=== Java API
+
+These new Java API will be added:
+
+* `org.pkl.core.PType.THIS`
+* `org.pkl.parser.syntax.Type.ThisType`
+* `org.pkl.parser.syntax.generic.NodeType.THIS_TYPE`
+
+== Compatibility
+
+The `this` type itself does not impact compatibility.
+
+Deprecating (and eventually disallowing) the use of the `module` type inside class and typealias bodies is a breaking change.
+A survey of several large Pkl corpuses (spanning >1M lines of code) turned up only two instances of the offending patterns, so the impact of this change should be low.
+
+== Alternatives considered
+
+=== Complete deprecation of the `module` type
+
+As proposed, the `this` type behaves identically to the `module` type when used at the module level.
+This is clear redundancy, and we considered deprecating the `module` type for removal entirely.
+This migration—replacement with the `this` type—could be assisted by Pkl's tooling (editor plugins or CLI) to minimize the impact, but it would still cause new Pkl code to be backwards-incompatible and old code to be forward-incompatible.
+Instead, this proposal opts to deprecates only uncommon and semantically unclear `module` type usage.
