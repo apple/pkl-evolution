@@ -1,0 +1,390 @@
+= URL standard library module
+
+* Proposal: link:./SPICE-0012-url-standard-library-module.adoc[SPICE-0012]
+* Author: https://github.com/bioball[Dan Chao]
+* Status: TBD
+* Implemented in: TBD
+* Category: Standard Library
+
+== Introduction
+
+This proposal introduces a new standard library module for managing and describing URLs.
+
+== Motivation
+
+A URL (URI) is a common type used within service configuration.
+
+Examples:
+
+* Website addresses
+* Database connection strings
+* Binary objects (data URIs)
+
+In the base module there is a typealias for `Uri`, but only defines it as a `String` and does not provide any extra validation.
+
+Currently, there exists an https://pkl-lang.org/package-docs/pkg.pkl-lang.org/pkl-pantry/pkl.experimental.uri/current/URI/index.html[experimental URI library].
+Much of this design is drawn from the learnings of that library.
+
+== Proposed Solution
+
+A new standard library module will be added, called `pkl.Url`.
+
+A new external property on `String` will be added, called `isValidUrl`.
+
+The `Uri` typealias will be changed to `typealias Uri = String(isValidUrl)`.
+
+== Detailed design
+
+Pkl's URL implementation will follow rules described in https://url.spec.whatwg.org[WHATWG URL standard].
+
+Following the standard, it will be called "URL", and not "URI" nor "IRI".
+The https://url.spec.whatwg.org/#goals[rationale] for this naming:
+
+> Standardize on the term URL. URI and IRI are just confusing. In practice a single algorithm is used for both so keeping them distinct is not helping anyone. URL also easily wins the https://trends.google.com/trends/explore?q=url,uri[search result popularity contest].
+
+=== module-level properties
+
+The following make up the properties of the Url module:
+
+.pkl.Url
+[source,pkl]
+----
+module pkl.Url
+
+/// The scheme component.
+scheme: AsciiString
+
+/// The username component.
+///
+/// If the URL does not require a username, set to the empty string.
+username: AsciiString
+
+/// The password component.
+///
+/// If the URL does not require a password, set to the empty string.
+password: AsciiString
+
+/// A domain name, IPV4 address, IPV6 address or an otherwise opaque host.
+hostname: String?
+
+/// The port component.
+port: UInt16?
+
+/// The path component.
+///
+/// It typically refers to a directory or a file, but has no predefined meaning.
+path: String?
+
+/// The query string component.
+query: String?
+
+/// The fragment component.
+fragment: AsciiString?
+
+/// A string whose characters are in the printable ASCII range (code points `0x20` through `0x7e`).
+local typealias AsciiString = String(matches(Regex("[ -~]*")))
+----
+
+=== Parser API
+
+A parser API will be introduced for parsing string inputs into URLs. This parser is a class within module `pkl.Url`.
+
+The parser will follow the steps as described in https://url.spec.whatwg.org/#concept-basic-url-parser[WHATWG].
+
+The base URL, as per the specification, is used to help resolve relative-URL strings.
+
+Additionally, module-level `parse` and `parseOrNull` helper methods exist for when the base URL is not needed.
+
+.pkl.Url
+[source,pkl]
+----
+module pkl.Url
+
+import "pkl:Url"
+
+// etc
+
+const local defaultParser: Parser
+
+/// Parses [source] into a URL.
+///
+/// Throws if [source] is an invalid URL.
+const function parse(source: String): Url = defaultParser.parse(source)
+
+/// Parses [source] into a URL.
+///
+/// Returns [null] if [source] is an invalid URL.
+const function parseOrNull(source: String): Url? = defaultParser.parseOrNull(source)
+
+/// A URL parser.
+///
+/// Follows the specification in <https://url.spec.whatwg.org/#concept-basic-url-parser>.
+class Parser {
+  /// The base URL, if any.
+  base: Url?
+
+  /// Parses [source] into a URL.
+  ///
+  /// Throws if [source] is an invalid URL.
+  external function parse(source: String): Url
+
+  /// Parses [source] into a URL.
+  ///
+  /// Returns [null] if [source] is an invalid URL.
+  external function parseOrNull(source: String): Url?
+}
+----
+
+=== `SearchParams` API
+
+A search params API will be introduced for working with `application/x-www-form-urlencoded` encoded query strings.
+
+Additionally, a `hidden fixed` property is added representing the parsed search params of the current URL's query string.
+
+.pkl.Url
+[source,pkl]
+----
+module pkl.Url
+
+// etc
+
+/// The query string parsed from
+/// [`application/x-www-form-urlencoded` encoding](https://en.wikipedia.org/wiki/Percent-encoding#The_application.2Fx-www-form-urlencoded_type).
+hidden fixed searchParams: SearchParams? =
+  if (query != null) SearchParams(query)
+  else null
+
+/// Creates a [SearchParams] from the given form encoded string.
+const function SearchParams(input: String): SearchParams = // etc
+
+/// A representation of data encoded in `application/x-www-form-urlencoded` format.
+class SearchParams {
+  values: Mapping<String, Listing<String>>
+
+  function toString()
+}
+----
+
+=== Percent encoding API
+
+Several new methods will be introduced for working with percent encoding.
+
+The `encode` method follows the `encodeURI` method as described in https://262.ecma-international.org/5.1/#sec-15.1.3.3[ECMA-262 15.1.3.3].
+
+The `encodeComponent` method follows the `encodeURIComponent` method as described in https://262.ecma-international.org/5.1/#sec-15.1.3.4[ECMA-262 15.1.3.4]
+
+.pkl.Url
+[source,pkl]
+----
+module pkl.Url
+
+/// The [percent-encoding](https://en.wikipedia.org/wiki/Percent-encoding) of the UTF-8 bytes of
+/// [source].
+///
+/// Example:
+/// ```
+/// percentEncode(" ") == "%20"
+/// percentEncode("/") == "%2F"
+/// ```
+const external function percentEncode(source: String): String
+
+/// The [percent-decoding](https://en.wikipedia.org/wiki/Percent-encoding) of [source] as utf-8 bytes into its underlying string.
+///
+/// Example:
+/// ```
+/// percentDecode("%20") == " "
+/// percentDecode("%2F") == "/"
+/// ```
+const external function percentDecode(source: String): String
+
+/// Encodes [value] using percent-encoding to make it safe for the literal use as a URL.
+///
+/// All characters except for alphanumeric chracters, and the chracters `!#$&'()*+,-./:;=?@_~`
+/// are percent-encoded.
+///
+/// Follows the rules for the `encodeURI` function as described by
+/// [ECMA-262](https://262.ecma-international.org/5.1/#sec-15.1.3.3).
+///
+/// Facts:
+/// ```
+/// encode("https://example.com/some path/") == "https://example.com/some%20path"
+/// ```
+const external function encode(value: String): String
+
+/// Encodes [str] using percent-encoding to make it safe to literal use as a URL component.
+///
+/// All characters except for alphanumeric characters, and the characters `-_.!~*'()` are
+/// percent-encoded.
+///
+/// Follows the rules for the `encodeURIComponent` function as described by
+/// [ECMA-262](https://262.ecma-international.org/5.1/#sec-15.1.3.4).
+///
+/// Facts:
+/// ```
+/// encodeComponent("https://example.com/some path") == "https%3A%2F%2example.com%2Fsome%20path"
+/// ```
+const external function encodeComponent(value: String): String
+----
+
+=== Method `toString()`, and `value`
+
+An external `value` property represents the serialized URL as a string.
+
+NOTE: Just like `fixed`, external properties cannot be assigned to.
+
+Additionally, the `toString()` method will be overridden to return this string value.
+
+.pkl.Url
+[source,pkl]
+----
+module pkl.Url
+
+// etc
+
+/// The serialized form of this Uri.
+external value: String(isValidUrl)
+
+function toString() = value
+----
+
+==== Sample usage:
+
+[source,pkl]
+----
+myUrl: Url = new {
+  scheme = "https"
+  host = "example.com"
+  path = "/foo.txt"
+}
+
+result = myUrl.toString() // <1>
+----
+<1> `result = "\https://example.com/foo.txt"`
+
+=== Method `resolveUrl()`
+
+A method, `resolveUrl()`, accepts another URL and resolves it as a reference to this URL.
+
+It follows the rules described in https://www.rfc-editor.org/rfc/rfc3986#section-5.2[RFC-3986 Section 5.2].
+
+.pkl.Url
+[source,pkl]
+----
+module pkl.Url
+
+import "pkl:Url"
+
+// etc
+
+/// Resolves [other] as a URI reference to this URI.
+///
+/// Follows the rules described in
+/// [RFC-3986 Section 5.2](https://www.rfc-editor.org/rfc/rfc3986#section-5.2).
+function resolveUrl(other: Url) = // implementation
+----
+
+=== Sample usage
+
+URLs can be constructed either by using the parser, or directly by setting fields on the struct.
+
+[source,pkl]
+----
+import "pkl:Url"
+
+myUrl: Url = new { // <1>
+  scheme = "https"
+  host = "example.com"
+  path = "/foo.txt"
+}
+
+myUrl2: Url = Url.parse("https://example.com/foo.txt") // <2>
+
+myUrl3: Url = new { // <3>
+  local sp: Url.SearchParams = new {
+    values {
+      ["key"] { "730d67" }
+    }
+  }
+  scheme = "https"
+  host = "example.com"
+  path = "/foo.txt"
+  query = sp.toString()
+}
+
+myUrl4: Url = // <4>
+  let (parsed = Url.parse("https://example.com/foo.txt?foo=bar"))
+    (parsed) {
+      query = (super.searchParams) {
+        values {
+          ["qux"] { "corge" }
+        }
+      }.toString()
+    }
+----
+<1> Constructing URL directly
+<2> Constructing a URL using `Url.parse()`
+<3> Constructing a URL query using the `SearchParams` API
+<4> Constructing a URL from an existing URL, and adding to its query string via the `SearchParams` API
+
+=== Language bindings
+
+Our language bindings will turn `pkl.Url` into the corresponding URL type in the target language.
+
+|===
+|Language |Type
+
+|Swift
+|https://developer.apple.com/documentation/foundation/url[`URL`] from Foundation
+
+|Java/Kotlin
+|https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/net/URI.html[`java.net.URI`] footnote:[Java also has a URL type, but its https://bugs.java.com/bugdatabase/view_bug.do?bug_id=4434494[usage is strongly discouraged].]
+
+|Go
+|https://pkg.go.dev/net/url[`net/url`]
+|===
+
+Third party language binding implementors are encouraged to map `pkl.Url` into their language's built-in URL type, if there is one.
+
+==== Message format
+
+When serialized, `pkl.Url` be encoded as a `Typed` object (see https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html#non-primitives).
+
+The client in the host language will turn the URL into the target language via their respective codec/mapper/unmarshaller.
+
+When decoding, the language has a choice whether construct the URL either component-wise (using a constructor and using `scheme`, `host`, e.t.c individually), or by constructing the URL using the serialized string form.
+
+Some languages (including JavaScript) only have constructors that accepts a serialized string.
+
+== Compatibility
+
+This is purely a new API, and is backwards compatible with existing Pkl.
+
+== Future directions
+
+=== IP Address Library
+
+A URL's host can possibly contain IPV4 and IPV6 addresses.
+To enhance using these types of URLs, Pkl can possibly introduce an IP Address library in the future.
+
+With an IP address library, it is possible to provide better constraints on the `host` property (either ASCII string or IP address).
+
+=== Modifying other standard library properties
+
+There are some other places throughout the standard library that make use of URIs.
+
+These include:
+
+* `pkl.reflect.Module.uri`
+* `pkl.reflect.Module.imports`
+* `pkl.Project.projectFileUri`
+* `pkl.EvaluatorSettings.Proxy.address`
+
+Currently, these are typed using typealias `Uri`.
+A possible future direction is to change these types to `pkl.Url`.
+
+== Alternatives considered
+
+Instead of introducing a new module, we can add these as types to `pkl.base`.
+However, any name added to the base module is a breaking change (a variable resolved off implicit `this` will break).
+
+Additionally, adding new classes adds more overhead to the evaluation of any module.
