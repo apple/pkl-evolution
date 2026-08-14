@@ -1,0 +1,146 @@
+= OS Base Directories
+
+* Proposal: xref:SPICE-0031-os-base-directories.adoc[SPICE-0031]
+* Author: link:https://github.com/bioball[Dan Chao]
+* Status: TBD
+* Implemented in: TBD
+* Category: Tooling
+
+== Introduction
+
+Move Pkl's user-level files of `~/.pkl`, and into OS-native base directories.
+
+== Motivation
+
+Currently, Pkl reads and writes the following files under `~/.pkl`:
+
+`~/.pkl/settings.pkl`:: the settings file
+`~/.pkl/cacerts/`:: CA certificates
+`~/.pkl/cache`:: the package cache
+`~/.pkl/repl-history`:: REPL history
+
+This introduces some problems:
+
+* These files have different lifecycles -- durable config, a disposable cache, and transient state -- but are all kept in one directory.
+* `~/.pkl` does not respect any user or system configuration of where such files should live, e.g. `$XDG_CONFIG_HOME`, or system-wide defaults set via `$XDG_CONFIG_DIRS`.
+* On Unix, per-user config and cache are conventionally stored according to the https://specifications.freedesktop.org/basedir/latest/[XDG Base Directory Specification].
+* On Windows, per-user config and cache are conventionally kept under `%APPDATA%` and `%LOCALAPPDATA%`, not a dotfile in the home directory.
+
+== Proposed Solution
+
+Pkl will resolve these files using base directories, following the https://specifications.freedesktop.org/basedir/latest/[XDG Base Directory Specification] on Linux and macOS, and the equivalent Known Folder environment variables on Windows:
+
+[cols="1,2,2,2",options="header"]
+|===
+| Concern | Unix (Linux/macOS) | Windows | Legacy fallback
+
+| Settings file
+| `~/.config/pkl/settings.pkl`
+| `%APPDATA%/pkl/settings.pkl`
+| `~/.pkl/settings.pkl`
+
+| CA certificates
+| `~/.config/pkl/cacerts`
+| `%APPDATA%/pkl/cacerts`
+| `~/.pkl/cacerts`
+
+| Package cache
+| `~/.cache/pkl`
+| `%LOCALAPPDATA%/pkl/Cache`
+| _(none)_
+
+| REPL history
+| `~/.local/state/pkl/repl-history`
+| `%LOCALAPPDATA%/pkl/repl-history`
+| _(none)_
+|===
+
+If the settings file or CA certificates directory is not found in the new location, Pkl falls back to reading the legacy `~/.pkl/settings.pkl` or `~/.pkl/cacerts/`.
+The package cache and REPL history have no legacy fallback; Pkl starts fresh in the new location, and the old `~/.pkl/cache` is left untouched.
+
+Every location above can still be set explicitly, via CLI flag (`--settings`, `--ca-certificates`, `--cache-dir`), Gradle property, or the corresponding XDG environment variable, which takes precedence on every OS, including Windows.
+
+== Detailed design
+
+=== Path resolution
+
+For the settings file and CA certificates directory, Pkl searches, in order:
+
+1. `$XDG_CONFIG_HOME/pkl/<file>` (all OSes)
+2. `%APPDATA%/pkl/<file>` (Windows only)
+3. `~/.config/pkl/<file>` (default, if neither env var above is set)
+4. `pkl/<file>` under each entry of `$XDG_CONFIG_DIRS` (`:`-separated on Unix, `;`-separated on Windows)
+5. `/etc/xdg/pkl/<file>` (default, if `$XDG_CONFIG_DIRS` is unset)
+6. `~/.pkl/<file>` (legacy)
+
+The first candidate that exists on disk is used. Steps 1-3 resolve to a single "home" candidate; an empty env var is treated as unset. Steps 4-5 are only consulted if the home candidate doesn't exist.
+
+The package cache and REPL history don't have a system-wide search path (steps 4-5), and don't fall back to a legacy location (step 6). They resolve `$XDG_CACHE_HOME`/`$XDG_STATE_HOME`, then the Windows env var, then the Unix default, unconditionally.
+
+=== Implementation
+
+A new internal class, `BaseDirectory`, implements this search order, parameterized per XDG concern (`config`, `cache`, `state`).
+
+`pkl-executor` cannot depend on `pkl-core`, so it duplicates the package cache resolution logic. Both implementations are tested against each other to guard against drift.
+
+=== Changes in pkl-intellij and pkl-lsp
+
+Our editor plugins rely on the cache directory when resolving downloaded packages.
+They will need to follow the same cache dir path resolution rules when loading package sources.
+
+For backwards compatibility, they will _also_ look in the legacy cache dir.
+
+Additionally, these editors write some caches of their own to system dirs (for example, `~/.pkl/editor-support`).
+
+These will be migrated to the directory pointed by "state"; (e.g. `$XDG_STATE_HOME/pkl/editor-support` and `$LOCALAPPDATA/pkl/editorsupport`).
+
+=== Debug mode
+
+To help debug how the CLI is loading things, Pkl will print debug log lines to STDERR when `PKL_DEBUG=1` is set.
+
+Example:
+
+[source]
+----
+$ PKL_DEBUG=1 pkl eval .dan-scripts/foo.pkl
+[pkl] Loading settings file from /Users/danielchao/.pkl/settings.pkl
+[pkl] Loading CA certificates from /Users/danielchao/.pkl/cacerts
+----
+
+== Compatibility
+
+This is a breaking change for the package cache: Pkl no longer reads `~/.pkl/cache`, and instead populates a new, empty cache at the OS-appropriate location.
+Anyone relying on a pre-populated `~/.pkl/cache` (e.g. in CI, to avoid network access) will need to either re-populate the new cache location, or point `--cache-dir`/`moduleCacheDir` at the old one explicitly.
+
+This is not a breaking change for the settings file or CA certificates, because Pkl falls back to the legacy `~/.pkl` location if nothing is found at the new location.
+
+REPL history is not migrated, since it's local, low-value, and easily regenerated.
+
+Documented default paths (in the CLI reference, Gradle plugin docs, and the `pkl.settings` module) are updated accordingly.
+
+== Future directions
+
+=== Removing the legacy fallback
+
+A future version of Pkl could stop falling back to `~/.pkl/settings.pkl` and `~/.pkl/cacerts/`, once enough time has passed for users to migrate.
+
+== Alternatives considered
+
+=== Keep using `~/.pkl` for everything
+
+This requires no fallback or migration logic.
+
+However, it does not follow platform conventions, and continues to mix config, cache, and state in one directory.
+
+=== Migrate `~/.pkl` contents into the new locations
+
+Instead of falling back to reading the legacy location, Pkl could copy `~/.pkl/settings.pkl`, `~/.pkl/cacerts/`, and `~/.pkl/cache` into their new locations on first run.
+
+This avoids keeping a permanent fallback code path.
+
+However, a first-run migration that writes files to system dirs is more complex (e.g. it introduces race conditions if Pkl is run simultaneously; some file systems lack atomic move operations), and hard to write correctly.
+Additionally, it adds a check on every invocation, which adds more overhead.
+
+== Acknowledgements
+
+Thanks to https://github.com/florinungur[Florin Ungur], who authored the first implementation this proposal!
