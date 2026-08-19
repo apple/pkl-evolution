@@ -48,74 +48,82 @@ This SPICE opts to write Pkl's self type as `this` for a few reasons:
 === Semantics
 
 The `this` type is an alias for the class of the current receiver (`this` value).
-For open classes, `this` admits values whose class is a subclass of the receiver.
+Within an `open` or `abstract` class or module, `this` is the specific subclass of the receiver.
+
+For each location in Pkl's grammar where a type may appear, the behavior of the `this` type is:
+
+|===
+
+|Location | Behavior
+
+|Class property type annotation
+.11+|Class of the visibly immediate enclosing receiver
+|Class method parameter type annotation
+|Class method return type annotation
+|Object property type annotation
+|Object method parameter type annotation
+|Object method return type annotation
+a|Let binding type annotation
+
+e.g. `let (val: this = ...)`
+a|Function literal parameter type annotation
+
+e.g. `(arg: this) -> ...`
+|Type test/cast (`is`/`as`)
+a|Explicit `new` expression
+
+e.g. `new this { ... }`
+a|Annotation type (only applicable within the bodies of `Annotation` subclasses)
+
+e.g. `@this { ... }`
+
+|Inside a type constraint
+a|Class of the visibly immediate enclosing receiver
+
+Does not refer to the class of the constrained type (the value of the `this` expression within a constraint).
 
 [source,pkl]
 ----
-open class A {
-  x: Int
-
-  function foo(bar: this): this = (this) {
-    x = super.x + bar.x
-  }
+class Foo {
+  bar: List(first is this) // <1>
 }
 
-class B extends A
-
-local a: A = new { x = 1 }
-local b: B = new { x = 2 }
-
-res1 = a.foo(a) // <1>
-res2 = a.foo(b) // <2>
-res3 = b.foo(a) // <3>
-res4 = b.foo(b) // <4>
+baz {
+  qux = quux is List(first is this) // <2>
+}
 ----
-<1> Result: `new A { x = 2 }`
-<2> Result: `new A { x = 3 }`
-<3> Evaluation error: ``Expected value of type \`B`, but got type \`A`.``
-<4> Result: `new B { x = 3 }`
+<1> `this` refers to `Foo`
+<2> `this` refers to the type of `baz`
 
-[NOTE]
-====
-Similar to the `this` expression, the `this` type resolves to the type of the visibly outer receiver when used in member predicates and `when` generators:
+a|Object body parameter
+.4+a|Class of the visibly _second_ enclosing receiver
 
 [source,pkl]
 ----
-local foo: Listing = new {
-  new Listing { "hello" }
-  new Mapping { ["hello"] = "world" }
-  module
-}
-
-bar = (foo) {
-  [[this is this]] { // <1>
-    res2 = "blah"
-  }
-  when (module is this) { // <2>
-    true
-  }
-  module is this // <3>
-}
-----
-<1> Matches `foo[2]`. `this` resolves to the type of the outer (module) scope.
-<2> Result: `true`. `this` resolves to the type of the outer (module) scope.
-<3> Result: `false`. `this` resolves to the type of the current scope (`Listing`).
-====
-
-[source,pkl]
-----
-foo: List(any((it) -> it is this)) // <1>
-
-bar: Listing
-baz: Listing = (bar) {
-  [[this is this]] { // <2>
-    new { "foo" }
+outside {
+  inside {
+    arg: this -> // <1>
+    for (val: this in something) { /* ... */ } // <1>
+    when (something is this) { /* ... */ } // <1>
+    [[key is this]] { /* ... */ } // <1>
   }
 }
 ----
-<1> Type `this` refers to the type of the module, which is the current lexical scope.
-<2> Value `this` refers to the
+<1> `this` refers to the type of `outside`
 
+|For generator binding type annotation
+|When generator condition
+|Inside a member predicate
+
+a|Typealias body
+
+e.g. `typealias Foo = this`
+.2+|Disallowed
+a|Class supertype
+
+e.g. `class Foo extends this`
+
+|===
 
 === Usage Restrictions
 
@@ -129,7 +137,7 @@ Because of this, the `this` type cannot be used inside typealias bodies:
 typealias Foo = Listing<this> // <1>
 
 typealias Bar<T> = Listing<T>
-qux: Bar<module> // <2>
+qux: Bar<this> // <2>
 ----
 <1> Use of the `this` type in a typealias body. Error: ``\`this` type annotations are not allowed in type alias bodies.``
 <2> Use of the `this` type at the module level as a type argument to a typealias. No error.
@@ -192,7 +200,7 @@ Only a couple Pkl API changes are directly required as part of adding the `this`
 * Add `pkl.reflect#ThisType`
 * Add `pkl.reflect#thisType`
 
-A couple more changes will be made to adopt the `this` type in existing APIs:
+A few more backwards-compatible changes will be made to adopt the `this` type in existing APIs:
 
 * `Any.getClass()` will return `Class<this>` instead of just `Class`.
 ** This allows removing special-cased workarounds from https://github.com/apple/pkl-intellij/pull/202[pkl-intellij] and https://github.com/apple/pkl-lsp/pull/188[pkl-lsp].
@@ -207,6 +215,8 @@ These new Java API will be added:
 * `org.pkl.parser.syntax.Type.ThisType`
 * `org.pkl.parser.syntax.generic.NodeType.THIS_TYPE`
 
+Clients of the Java API that wowk with `PType` values may need to be updated to account for `PType.THIS`.
+
 == Compatibility
 
 The `this` type itself does not impact compatibility.
@@ -218,7 +228,7 @@ A survey of several large Pkl corpuses (spanning >1M lines of code) turned up on
 
 === Complete deprecation of the `module` type
 
-As proposed, the `this` type behaves identically to the `module` type when used at the module level.
+As proposed, the `this` type behaves almost identically to the `module` type when used at the module level.
 This is clear redundancy, and we considered deprecating the `module` type for removal entirely.
 This migration—replacement with the `this` type—could be assisted by Pkl's tooling (editor plugins or CLI) to minimize the impact, but it would still cause new Pkl code to be backwards-incompatible and old code to be forward-incompatible.
 Instead, this proposal opts to deprecates only uncommon and semantically unclear `module` type usage.
