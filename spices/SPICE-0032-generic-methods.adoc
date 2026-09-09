@@ -1,0 +1,96 @@
+= User Generic Methods
+
+* Proposal: link:./SPICE-0032-generic-methods.adoc[SPICE-0032]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.33
+* Category: Language, Tooling
+
+== Introduction
+
+Support for methods with type parameters in user code.
+
+== Motivation
+
+Currently, Pkl has basic support for generic methods, but only within its own standard library.
+
+This support is limited, primarily by "faking" type checking of type parameters.
+Unlike many statically compiled languages with generics, Pkl performs no type inference.
+All type checks against type parameters are a noop and succeed implicitly.
+
+Generics are a powerful tool for API design and help make Pkl's standard library expressive.
+It would be great if this same
+
+== Proposed Solution
+
+The restriction on declaring generic methods in user code will be lifted.
+User-declared class and object (`local`) methods will be permitted.
+
+Additionally, new syntax for explicitly specifying type arguments in method calls will be added.
+Explicit type arguments in calls will be supported for all generic method calls, including generic methods in the standard library.
+
+== Detailed design
+
+TODO
+
+== Compatibility
+
+Adding user generic methods and support for calling generic methods with explicit type arguments is purely additive.
+Existing Pkl code will continue to function as-is.
+
+The implementation of generic methods includes a breaking change to the `pkl.ref#Reference()` method, removing the second (`class`) parameter in favor of passing the referent type as an explicit method call type argument.
+In Pkl 0.32 this API is considered experimental and subject to breakage without warning.
+
+== Future directions
+
+=== Type argument constraints
+
+TODO
+
+=== User generic classes
+
+TODO
+
+== Alternatives considered
+
+=== Call syntax
+
+This SPICE opts for Rust-style "turbo fish" (`::<>`) syntax for specifying type arguments in method calls.
+The primary reasoning for this is that mirroring the generic method declaration syntax (i.e. without the `::`) is ambiguous: the parser cannot distinguish between calling a method with type arguments (`foo<Bar>(baz)`) and the "less than" operator (`foo < bar`) without arbitrary backtracking, which impacts Pkl's performance and security (as a vector for denial-of-service attacks).
+
+[source]
+----
+// Rust-style, as proposed
+foo::<Bar>(baz)
+
+// type arguments as leading arguments
+foo(<Bar> baz)
+
+// Java-style (still ambiguous for unqualified method calls)
+<Bar>foo(baz)
+qux.<Bar>foo(baz)
+
+// Haskell-ish-style
+foo(@Bar, baz)
+
+// Lua-style
+foo<<Bar>>(baz)
+
+// Go/Python-style (ambiguous with subscript syntax)
+foo[Bar](baz)
+
+// Swift-style (requires types as in-language values)
+foo(Bar.self, baz) // still requires backtracking
+foo(type<Bar>, baz) // alternate no-backtracking type reification
+// where the decl is something like `function foo<T>(type: T.Type, baz)`
+
+// alternate sigils
+foo#<Bar>(baz)
+foo&<Bar>(baz)
+foo@<Bar>(baz)
+foo'<Bar>(baz)
+foo!<Bar>(baz)
+foo^<Bar>(baz)
+----
+
+The Rust-style syntax was chose because it can be parsed without backtracking and there is prior art in a modern strongly-typed language.
