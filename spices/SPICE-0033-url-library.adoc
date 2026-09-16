@@ -41,6 +41,19 @@ in relation to an absolute one.
 
 [source,pkl]
 ----
+/// Parse a string into a URL, following [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986).
+/// Accepts a URL reference (one without a scheme).
+///
+/// Throws if [input] is not a valid URL.
+///
+/// To test if [input] is a valid URL, use [String.isValidUrl].
+///
+/// Facts:
+/// ```
+/// net.Url("https://example.com/foo?a=1").host == "example.com"
+/// net.Url("https://example.com/foo?a=1").query == "a=1"
+/// net.Url("/foo").scheme == null
+/// ```
 external const function Url(input: String): Url
 ----
 
@@ -54,33 +67,126 @@ All base properties of Url are non-fixed to allow amendment.
 
 [source,pkl]
 ----
+/// A URL, as defined by [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986).
+/// [RFC 6874](https://www.rfc-editor.org/rfc/rfc6874) IPv6 zone literals are also supported.
 class Url {
+  /// The scheme, without the trailing `:`, or [null] if this is a relative reference.
+  ///
+  /// [Url()] lowercases this, as schemes are case-insensitive.
   scheme: String(isValidScheme(this))? // <1>
 
+  /// The userinfo, without the trailing `@`, or [null] if this URL has none.
+  ///
+  /// Only a URL with a [host] can have userinfo.
   userInfo: String(host != null && isValidPercentEncoding(this))? // <1>
 
+  /// The host, or [null] if this URL has no authority.
+  ///
+  /// A [null] host is not the same as an empty one: `file:/tmp` has no host, `file:///tmp` has an
+  /// empty one.
+  ///
+  /// An IPv6 address must be enclosed in brackets, as in `[::1]`.
+  /// It may carry a zone identifier, as described in RFC 6874.
+  /// Anything else is a registered name, whose brackets, if it has any, must be percent-encoded.
   host: String(isValidHost(this))? // <1>
 
+  /// The port, or [null] if this URL states none.
+  ///
+  /// Only a URL with a [host] can have a port.
   port: UInt16(host != null)? // <1>
 
+  /// The path, or the empty string if this URL has none.
+  ///
+  /// A URL with a [host] has either an empty path or one starting with `/`.
+  /// A URL without one may also have a *rootless* path, as `mailto:user@example.com` does.
   path: String(isValidPath(this, host != null)) = "" // <1>
 
+  /// The query, without the leading `?`, or [null] if this URL has none.
+  ///
+  /// The empty string is a URL ending in a bare `?`.
   query: String(isValidPercentEncoding(this))? // <1>
 
+  /// The fragment, without the leading `#`, or [null] if this URL has none.
+  ///
+  /// The empty string is a URL ending in a bare `#`.
   fragment: String(isValidPercentEncoding(this))? // <1>
 
+  /// Returns [true] if this URL is absolute: has a non-null scheme.
   hidden fixed isAbsolute: Boolean = scheme != null // <2>
 
+  /// The authority, without the leading `//`, or [null] if this URL has none.
+  ///
+  /// A URL has an authority exactly when it has a [host].
+  /// This is [userInfo], [host] and [port] joined back together, encoded as in [toString()].
   external fixed authority: String?
 
+  /// The percent-decoded segments of [path].
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/a/b%20c").segments == List("a", "b c")
+  /// ```
   external fixed segments: List<String> // <3>
 
+  /// The percent-decoded parameters of [query], or an empty mapping if this URL has no query.
+  ///
+  /// [query] is read as `application/x-www-form-urlencoded`.
+  /// A name that repeats holds the values of all its occurrences, in the order they are written.
+  /// A parameter that states no `=` holds no value at all, and is left out; this is not the same as
+  /// a bare `=`, which gives it the empty string.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/?q=a+b&q=c").queryParameters["q"] == new Listing { "a b"; "c" }
+  /// net.Url("https://example.com/").queryParameters.isEmpty
+  /// ```
   external fixed queryParameters: Mapping<String, Listing<String>> // <4>
 
+  /// Resolves [ref] against this URL.
+  ///
+  /// [ref] is either a relative reference, which is resolved against this URL, or an absolute URL,
+  /// which replaces it entirely.
+  /// Dot segments are removed from the result's path, normalizing it.
+  ///
+  /// Throws if [ref] is a string that cannot be parsed, or if this URL is itself a relative
+  /// reference.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/a/b").resolve("../c").toString() == "https://example.com/c"
+  /// net.Url("https://example.com/a/b").resolve("#top").toString() == "https://example.com/a/b#top"
+  /// ```
   external function resolve(ref: String | Url): Url // <5>
 
+  /// Whether [other] identifies the same resource as this URL.
+  ///
+  /// Unlike `==`, this compares Urls as the *syntax-based normalization* of RFC 3986:
+  /// [scheme] and [host] are case-insensitive and percent-encoding is normalized.
+  /// An octet standing for a reserved character is kept as written.
+  ///
+  /// Dot segments are only removed from an absolute [path].
+  ///
+  /// Nothing that would take knowing the scheme is normalized.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("HTTPS://Example.com/%7Euser").equals(net.Url("https://example.com/~user"))
+  /// !(net.Url("https://example.com/a%2Fb").equals(net.Url("https://example.com/a/b")))
+  /// !(net.Url("https://example.com:443/").equals(net.Url("https://example.com/")))
+  /// ```
   external function equals(other: Url): Boolean // <6>
 
+  /// The serialization of this URL.
+  ///
+  /// Every character that cannot appear literally in its component is percent-encoded as its UTF-8
+  /// bytes.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/a b").toString() == "https://example.com/a%20b"
+  /// net.Url("https://example.com/é").toString() == "https://example.com/%C3%A9"
+  /// net.Url("HTTPS://example.com").toString() == "https://example.com"
+  /// ```
   external function toString(): String // <7>
 }
 ----
@@ -137,11 +243,58 @@ Some helper functions are needed to help build or extract information from URLs.
 
 [source,pkl]
 ----
+/// Percent-encodes [value] so that it can be interpolated into any URL component.
+///
+/// Every character other than an ASCII alphanumeric or one of `-._~`, the *unreserved* characters
+/// of RFC 3986, is percent-encoded as its UTF-8 bytes.
+///
+/// Facts:
+/// ```
+/// net.encodeUrlComponent("a b&c") == "a%20b%26c"
+/// net.encodeUrlComponent("50%") == "50%25"
+/// ```
 external const function encodeUrlComponent(value: String): String // <1>
 
+/// Percent-decodes [value], interpreting the decoded bytes as UTF-8.
+///
+/// The inverse of [encodeUrlComponent()].
+/// A `%` that does not begin a percent-encoded octet is kept as-is.
+///
+/// Facts:
+/// ```
+/// net.decodeUrlComponent("a%20b%26c") == "a b&c"
+/// net.decodeUrlComponent("50%") == "50%"
+/// ```
 external const function decodeUrlComponent(value: String): String // <1>
 
+/// Builds a query from [parameters], for use as a [Url.query].
+///
+/// The result is `application/x-www-form-urlencoded`.
+/// A name is written once per value it holds; one that holds no values is left out entirely.
+///
+/// [Url.queryParameters] reads back exactly the parameters given here, less any name that holds no
+/// values.
+///
+/// Facts:
+/// ```
+/// net.buildQuery(new Mapping { ["q"] = new Listing { "a b" } }) == "q=a+b"
+/// net.buildQuery(new Mapping { ["a"] = new Listing { "1"; "2" } }) == "a=1&a=2"
+/// net.buildQuery(new Mapping { ["a"] = new Listing { "1" }; ["b"] = new Listing {} }) == "a=1"
+/// ```
 external const function buildQuery(parameters: Mapping<String, Listing<String>>): String // <2>
+
+/// Reads [query] back into its parameters.
+///
+/// [query] is read as `application/x-www-form-urlencoded`.
+/// A name that repeats holds the values of all its occurrences, in the order they are written.
+/// A parameter that states no `=` holds no value at all, and is left out.
+///
+/// Facts:
+/// ```
+/// net.parseQuery("a=1&a=2") == new Mapping { ["a"] = new Listing { "1"; "2" } }
+/// net.parseQuery("q=a+b&bare") == new Mapping { ["q"] = new Listing { "a b" } }
+/// ```
+external const function parseQuery(query: String): Mapping<String, Listing<String>>
 
 external local const function isValidPercentEncoding(value: String): Boolean // <3>
 
