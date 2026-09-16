@@ -2,8 +2,8 @@
 
 * Proposal: link:./SPICE-0012-url-standard-library-module.adoc[SPICE-0012]
 * Author: https://github.com/bioball[Dan Chao]
-* Status: TBD
-* Implemented in: TBD
+* Status: Rejected, superceded by SPICE-0033
+* Implemented in: N/A
 * Category: Standard Library
 
 == Introduction
