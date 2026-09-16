@@ -1,0 +1,220 @@
+= URL support in the standard library
+
+* Proposal: link:./SPICE-0033-url-library.adoc[SPICE-0033]
+* Author: link:https://github.com/stackoverflow[Islon Scherer]
+* Status: TBD
+* Implemented in: TBD
+* Category: Standard Library
+
+== Introduction
+
+Add native URL support to Pkl's standard library.
+
+== Motivation
+
+Even though URLs are commonly used for configuration, Pkl has no out-of-the-box support for URLs.
+There's a https://github.com/apple/pkl-pantry/tree/main/packages/pkl.experimental.uri[URI package in the pantry], but
+it's not very performant due to being fully implemented in Pkl.
+Also, the `Uri` typealias in our standard library is just a `String`, having no validation.
+
+== Proposed Solution
+
+This SPICE proposes a Pkl-native URL implementation in the standard library, exposing a native, performant parser,
+that supports https://www.rfc-editor.org/rfc/rfc3986[RFC 3986] and https://www.rfc-editor.org/rfc/rfc6874[RFC 6874]
+(IPv6 zone identifiers for link-local addresses).
+Users will be able to create and alter URLs, with the guarantee they are well-formed. It will also be possible to
+validate that a string is a URLs.
+
+== Detailed design
+
+=== Base design
+
+A new stdlib module: `pkl:net`. +
+We are using `net` and not `url`, because more functionality can be added later to `net` (like native IP support).
+
+=== Parser
+
+An RFC 3986 and RFC 6874 compliant parser implemented in Java, and exposed via the `Url(String)` constructor in the `net`
+module. This constructor will throw on invalid URLs, like the `Regex(String)` constructor.
+The parser will accept relative URLs (URL references in RFC 3986 parlance), and will be able to resolve a relative URL
+in relation to an absolute one.
+
+[source,pkl]
+----
+external const function Url(input: String): Url
+----
+
+=== Url class
+
+The `Url` constructor will return a `Url` object. This object will contain all the parts parsed, or constructed, like
+`path`, `scheme`, etc.
+All the (non-external) properties will have constraints to make sure no invalid URLs can be created.
+Both the parser and the Url class properties will accept decoded strings. This is done to simplify usage.
+All base properties of Url are non-fixed to allow amendment.
+
+[source,pkl]
+----
+class Url {
+  scheme: String(isValidScheme(this))? // <1>
+
+  userInfo: String(host != null && isValidPercentEncoding(this))? // <1>
+
+  host: String(isValidHost(this))? // <1>
+
+  port: UInt16(host != null)? // <1>
+
+  path: String(isValidPath(this, host != null)) = "" // <1>
+
+  query: String(isValidPercentEncoding(this))? // <1>
+
+  fragment: String(isValidPercentEncoding(this))? // <1>
+
+  hidden fixed isAbsolute: Boolean = scheme != null // <2>
+
+  external fixed authority: String?
+
+  external fixed segments: List<String> // <3>
+
+  external fixed queryParameters: Mapping<String, Listing<String>> // <4>
+
+  external function resolve(ref: String | Url): Url // <5>
+
+  external function equals(other: Url): Boolean // <6>
+
+  external function toString(): String // <7>
+}
+----
+<1> All properties are stored raw (as they are given) and are validated
+<2> URLs can be relative
+<3> The percent-encoded segments of `path`
+<4> A form-encoded mapping of the query parameters
+<5> Resolve a relative URL against this URL; throws if `this` is relative or `ref` is an invalid URL; returns `ref` if it is absolute
+<6> Normalized equality to know if two URLs are the same, unlike the structural comparison of `==`
+<7> Serialized String form with the whole URL properly encoded
+
+Examples:
+
+[source,pkl]
+----
+import "pkl:net"
+
+local url = net.Url("https://user:pw@example.com:8080/a/b/c?q=ä b&null&empty=#f")
+
+myUrl = url.toString() // <1>
+
+host = url.host // <2>
+
+query = url.queryParameters // <3>
+
+resolved = url.resolve("../d/e").toString() // <4>
+
+amended = (url) {
+  host = "another.com"
+  port = null
+}.toString() // <5>
+----
+<1> "https://user:pw@example.com:8080/a/b/c?q=%C3%A4%20b&null&empty=#f"
+<2> example.com
+<3> `new Mapping { ["q"] { "ä b" }; ["null"] { null }; ["empty"] { "" } }`
+<4> "https://user:pw@example.com:8080/a/d/e"
+<5> "https://user:pw@another.com/a/b/c?q=%C3%A4%20b&null&empty=#f"
+
+=== URL validation
+
+A new external property will be added to the String class: `external isValidUrl: Boolean`.
+Similar to how `isRegex` works, this property will tell if a string is a valid URL.
+The `Uri` typealias in base will be redefined as `typealias Uri = String(isValidUrl)`.
+This is a breaking change, but if this fails, you have an invalid URL and should fix it.
+
+This validation is stricter than the one from the regular `Url()` constructor:
+
+- It only accepts absolute URLs
+- All components should be properly encoded
+
+=== Helper functions
+
+Some helper functions are needed to help build or extract information from URLs.
+
+[source,pkl]
+----
+external const function encodeUrlComponent(value: String): String // <1>
+
+external const function decodeUrlComponent(value: String): String // <1>
+
+external const function buildQuery(parameters: Mapping<String, Listing<String>>): String // <2>
+
+external local const function isValidPercentEncoding(value: String): Boolean // <3>
+
+external local const function isValidScheme(value: String): Boolean // <3>
+
+external local const function isValidHost(value: String): Boolean // <3>
+
+external local const function isValidPath(value: String, hasAuthority: Boolean): Boolean // <3>
+----
+<1> Percent encode/decode components
+<2> Encode a mapping of strings into a query
+<3> Validation functions
+
+=== Language bindings
+
+Our language bindings will turn a `net.Url` into the corresponding URL type in the target language.
+
+|===
+|Language |Type
+
+|Swift
+|https://developer.apple.com/documentation/foundation/url[`URL`] (Foundation)
+
+|Java/Kotlin
+|https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/net/URI.html[`java.net.URI`] footnote:[Java also has a URL type, but its https://bugs.java.com/bugdatabase/view_bug.do?bug_id=4434494[usage is strongly discouraged].]
+
+|Go
+|https://pkg.go.dev/net/url[`net/url`]
+|===
+
+Third party language binding implementors are encouraged to map `net.Url` into their language's built-in URL type,
+if there is one.
+
+==== Message format
+
+When serialized, `net.Url` will be encoded as a `Typed` object (see https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html#non-primitives).
+
+The client in the host language will turn the URL into the target language via their respective codec/mapper/unmarshaller.
+
+When decoding, the language has a choice whether construct the URL either component-wise (using a constructor
+and using `scheme`, `host`, etc. individually), or by constructing the URL using the serialized string form.
+
+== Compatibility
+
+Compatibility with `pkl.experimental.uri` was not a goal, but the two libraries are relatively similar (both based
+on RFC 3986).
+
+The `read(String)` and `read?(String)` primitives were not touched.
+
+The change to the `Uri` typealias is backward incompatible, but considered a bugfix.
+
+== Future directions
+
+More functions/properties can be added to the Url class, like the `normalize` and `relativize`. +
+We could also have encoded, fixed versions of all the base properties, like host, path, etc.
+
+IDNA, punnycode support could be added, if needed.
+
+If we add an IO/path API to Pkl we can convert between file URLs and paths. Same for native IP support: we can add
+properties to get an IP out of the host.
+
+== Alternatives considered
+
+=== Do nothing and keep using `pkl.experimental.uri`
+
+Performance suffers from having the parser in Pkl. It also can't solve the validation problem
+which should be added to the base String class.
+
+=== Use WHATWG instead of RFC 3986
+
+WHATWG is a more complex spec, with validations that require full URL context, so it's harder to add constraints to parts of an URL.
+It also requires IDNA support, which would add a lot of complexity to the implementation.
+
+== Acknowledgements
+
+Thanks, https://github.com/bioball[Dan Chao] for the https://github.com/apple/pkl-evolution/pull/13[previous SPICE on this theme].
