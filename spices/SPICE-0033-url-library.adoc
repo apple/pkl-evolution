@@ -1,0 +1,397 @@
+= URL support in the standard library
+
+* Proposal: link:./SPICE-0033-url-library.adoc[SPICE-0033]
+* Author: link:https://github.com/stackoverflow[Islon Scherer]
+* Status: TBD
+* Implemented in: TBD
+* Category: Standard Library
+
+== Introduction
+
+Add native URL support to Pkl's standard library.
+
+== Motivation
+
+Even though URLs are commonly used for configuration, Pkl has no out-of-the-box support for URLs.
+There's a https://github.com/apple/pkl-pantry/tree/main/packages/pkl.experimental.uri[URI package in the pantry], but
+it's not very performant due to being fully implemented in Pkl.
+Also, the `Uri` typealias in our standard library is just a `String`, having no validation.
+
+== Proposed Solution
+
+This SPICE proposes a Pkl-native URL implementation in the standard library, exposing a native, performant parser,
+that supports https://www.rfc-editor.org/rfc/rfc3986[RFC 3986] and https://www.rfc-editor.org/rfc/rfc6874[RFC 6874]
+(IPv6 zone identifiers for link-local addresses).
+Users will be able to create and alter URLs, with the guarantee they are well-formed. It will also be possible to
+validate that a string is a URLs.
+
+== Detailed design
+
+=== Base design
+
+A new stdlib module: `pkl:net`. +
+We are using `net` and not `url`, because more functionality can be added later to `net` (like native IP support).
+
+=== Parser
+
+An RFC 3986 and RFC 6874 compliant parser implemented in Java, and exposed via the `Url(String)` constructor in the `net`
+module. This constructor will throw on invalid URLs, like the `Regex(String)` constructor.
+The parser will accept relative URLs (URL references in RFC 3986 parlance), and will be able to resolve a relative URL
+in relation to an absolute one.
+
+[source,pkl]
+----
+/// Parse a string into a URL, following [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986).
+/// Accepts a URL reference (one without a scheme).
+///
+/// Throws if [input] is not a valid URL.
+///
+/// To test if [input] is a valid URL, use [String.isValidUrl].
+///
+/// Facts:
+/// ```
+/// net.Url("https://example.com/foo?a=1").host == "example.com"
+/// net.Url("https://example.com/foo?a=1").query == "a=1"
+/// net.Url("/foo").scheme == null
+/// ```
+external const function Url(input: String): Url
+----
+
+=== Url class
+
+The `Url` constructor will return a `Url` object. This object will contain all the parts parsed, or constructed, like
+`path`, `scheme`, etc.
+All the (non-external) properties will have constraints to make sure no invalid URLs can be created.
+Both the parser and the Url class properties will accept decoded strings. This is done to simplify usage.
+All base properties of Url are non-fixed to allow amendment.
+
+[source,pkl]
+----
+/// A URL, as defined by [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986).
+/// [RFC 6874](https://www.rfc-editor.org/rfc/rfc6874) IPv6 zone literals are also supported.
+class Url {
+  /// The scheme, without the trailing `:`, or [null] if this is a relative reference.
+  ///
+  /// [Url()] lowercases this, as schemes are case-insensitive.
+  scheme: String(isValidScheme(this))? // <1>
+
+  /// The userinfo, without the trailing `@`, or [null] if this URL has none.
+  ///
+  /// Only a URL with a [host] can have userinfo.
+  userInfo: String(host != null && isValidPercentEncoding(this))? // <1>
+
+  /// The host, or [null] if this URL has no authority.
+  ///
+  /// A [null] host is not the same as an empty one: `file:/tmp` has no host, `file:///tmp` has an
+  /// empty one.
+  ///
+  /// An IPv6 address must be enclosed in brackets, as in `[::1]`.
+  /// It may carry a zone identifier, as described in RFC 6874.
+  /// Anything else is a registered name, whose brackets, if it has any, must be percent-encoded.
+  host: String(isValidHost(this))? // <1>
+
+  /// The port, or [null] if this URL states none.
+  ///
+  /// Only a URL with a [host] can have a port.
+  port: UInt16(host != null)? // <1>
+
+  /// The path, or the empty string if this URL has none.
+  ///
+  /// A URL with a [host] has either an empty path or one starting with `/`.
+  /// A URL without one may also have a *rootless* path, as `mailto:user@example.com` does.
+  path: String(isValidPath(this, host != null)) = "" // <1>
+
+  /// The query, without the leading `?`, or [null] if this URL has none.
+  ///
+  /// The empty string is a URL ending in a bare `?`.
+  query: String(isValidPercentEncoding(this))? // <1>
+
+  /// The fragment, without the leading `#`, or [null] if this URL has none.
+  ///
+  /// The empty string is a URL ending in a bare `#`.
+  fragment: String(isValidPercentEncoding(this))? // <1>
+
+  /// Returns [true] if this URL is absolute: has a non-null scheme.
+  hidden fixed isAbsolute: Boolean = scheme != null // <2>
+
+  /// The authority, without the leading `//`, or [null] if this URL has none.
+  ///
+  /// A URL has an authority exactly when it has a [host].
+  /// This is [userInfo], [host] and [port] joined back together, encoded as in [toString()].
+  external fixed authority: String?
+
+  /// The percent-decoded segments of [path].
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/a/b%20c").pathSegments == List("a", "b c")
+  /// ```
+  external fixed pathSegments: List<String>
+
+  /// The percent-decoded parameters of [query], or an empty mapping if this URL has no query.
+  ///
+  /// [query] is read as `application/x-www-form-urlencoded`.
+  /// A name that repeats holds the values of all its occurrences, in the order they are written.
+  /// A parameter that states no `=` holds no value at all, and is left out; this is not the same as
+  /// a bare `=`, which gives it the empty string.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/?q=a+b&q=c").queryParameters["q"] == new Listing { "a b"; "c" }
+  /// net.Url("https://example.com/").queryParameters.isEmpty
+  /// ```
+  external fixed queryParameters: Mapping<String, Listing<String>>
+
+  /// Resolves [ref] against this URL.
+  ///
+  /// [ref] is either a relative reference, which is resolved against this URL, or an absolute URL,
+  /// which replaces it entirely.
+  /// Dot segments are removed from the result's path, normalizing it.
+  ///
+  /// Throws if [ref] is a string that cannot be parsed, or if this URL is itself a relative
+  /// reference.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/a/b").resolve("../c").toString() == "https://example.com/c"
+  /// net.Url("https://example.com/a/b").resolve("#top").toString() == "https://example.com/a/b#top"
+  /// ```
+  external function resolve(ref: String | Url): Url
+
+  /// Returns this URL in the *syntax-based normalization* of
+  /// [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-6.2.2).
+  ///
+  /// [scheme] and [host] are lowercased, as they are case-insensitive.
+  /// Percent-encoding is normalized: an octet standing for an unreserved character is decoded, and
+  /// any other octet is kept, with its hex digits uppercased.
+  /// A character that cannot appear literally in its component is encoded.
+  ///
+  /// Dot segments are only removed from an absolute [path].
+  /// A URL with a [host] and no path is given the path `/`, which names the same resource.
+  ///
+  /// Nothing that would take knowing the scheme is normalized; in particular, a default port is
+  /// kept.
+  ///
+  /// Two URLs identify the same resource exactly when their normalizations are equal; this is what
+  /// [equals()] compares.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("HTTPS://Example.com/%7Euser").normalize() == net.Url("https://example.com/~user")
+  /// net.Url("https://example.com/a/b/../c").normalize().path == "/a/c"
+  /// net.Url("https://example.com").normalize().path == "/"
+  /// ```
+  external function normalize(): Url
+
+  /// Whether [other] identifies the same resource as this URL.
+  ///
+  /// Unlike `==`, this compares Urls as the *syntax-based normalization* of RFC 3986:
+  /// [scheme] and [host] are case-insensitive and percent-encoding is normalized.
+  /// An octet standing for a reserved character is kept as written.
+  ///
+  /// Dot segments are only removed from an absolute [path].
+  ///
+  /// Nothing that would take knowing the scheme is normalized.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("HTTPS://Example.com/%7Euser").equals(net.Url("https://example.com/~user"))
+  /// !(net.Url("https://example.com/a%2Fb").equals(net.Url("https://example.com/a/b")))
+  /// !(net.Url("https://example.com:443/").equals(net.Url("https://example.com/")))
+  /// ```
+  external function equals(other: Url): Boolean
+
+  /// The serialization of this URL.
+  ///
+  /// Every character that cannot appear literally in its component is percent-encoded as its UTF-8
+  /// bytes.
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com/a b").toString() == "https://example.com/a%20b"
+  /// net.Url("https://example.com/é").toString() == "https://example.com/%C3%A9"
+  /// net.Url("HTTPS://example.com").toString() == "https://example.com"
+  /// ```
+  external function toString(): String
+
+  /// Whether every `%` in [value] begins a percent-encoded octet.
+  external local function isValidPercentEncoding(value: String): Boolean
+
+  /// Whether [value] is a `scheme`.
+  external local function isValidScheme(value: String): Boolean
+
+  /// Whether [value] is a `host`.
+  external local function isValidHost(value: String): Boolean
+
+  /// Whether [value] is a path that can sit next to an authority, or, when [hasAuthority] is
+  /// [false], next to no authority at all.
+  external local function isValidPath(value: String, hasAuthority: Boolean): Boolean
+}
+----
+<1> All properties are stored raw (as they are given) and are validated
+<2> URLs can be relative
+
+Examples:
+
+[source,pkl]
+----
+import "pkl:net"
+
+local url = net.Url("https://user:pw@example.com:8080/a/b/c?q=ä b&null&empty=#f")
+
+myUrl = url.toString() // <1>
+
+host = url.host // <2>
+
+query = url.queryParameters // <3>
+
+resolved = url.resolve("../d/e").toString() // <4>
+
+amended = (url) {
+  host = "another.com"
+  port = null
+}.toString() // <5>
+----
+<1> "https://user:pw@example.com:8080/a/b/c?q=%C3%A4%20b&null&empty=#f"
+<2> example.com
+<3> `new Mapping { ["q"] { "ä b" }; ["null"] { null }; ["empty"] { "" } }`
+<4> "https://user:pw@example.com:8080/a/d/e"
+<5> "https://user:pw@another.com/a/b/c?q=%C3%A4%20b&null&empty=#f"
+
+=== URL validation
+
+A new external property will be added to the String class: `external isValidUrl: Boolean`.
+Similar to how `isRegex` works, this property will tell if a string is a valid URL.
+The `Uri` typealias in base will be redefined as `typealias Uri = String(isValidUrl)`.
+This is a breaking change, but if this fails, you have an invalid URL and should fix it.
+
+This validation is stricter than the one from the regular `Url()` constructor:
+
+- It only accepts absolute URLs
+- All components should be properly encoded
+
+=== Helper functions
+
+Some helper functions are needed to help build or extract information from URLs.
+
+[source,pkl]
+----
+/// Percent-encodes [value] so that it can be interpolated into any URL component.
+///
+/// Every character other than an ASCII alphanumeric or one of `-._~`, the *unreserved* characters
+/// of RFC 3986, is percent-encoded as its UTF-8 bytes.
+///
+/// Facts:
+/// ```
+/// net.encodeUrlComponent("a b&c") == "a%20b%26c"
+/// net.encodeUrlComponent("50%") == "50%25"
+/// ```
+external const function encodeUrlComponent(value: String): String // <1>
+
+/// Percent-decodes [value], interpreting the decoded bytes as UTF-8.
+///
+/// The inverse of [encodeUrlComponent()].
+/// A `%` that does not begin a percent-encoded octet is kept as-is.
+///
+/// Facts:
+/// ```
+/// net.decodeUrlComponent("a%20b%26c") == "a b&c"
+/// net.decodeUrlComponent("50%") == "50%"
+/// ```
+external const function decodeUrlComponent(value: String): String // <1>
+
+/// Builds a query from [parameters], for use as a [Url.query].
+///
+/// The result is `application/x-www-form-urlencoded`.
+/// A name is written once per value it holds; one that holds no values is left out entirely.
+///
+/// [Url.queryParameters] reads back exactly the parameters given here, less any name that holds no
+/// values.
+///
+/// Facts:
+/// ```
+/// net.buildQuery(new Mapping { ["q"] = new Listing { "a b" } }) == "q=a+b"
+/// net.buildQuery(new Mapping { ["a"] = new Listing { "1"; "2" } }) == "a=1&a=2"
+/// net.buildQuery(new Mapping { ["a"] = new Listing { "1" }; ["b"] = new Listing {} }) == "a=1"
+/// ```
+external const function buildQuery(parameters: Mapping<String, Listing<String>>): String // <2>
+
+/// Reads [query] back into its parameters.
+///
+/// [query] is read as `application/x-www-form-urlencoded`.
+/// A name that repeats holds the values of all its occurrences, in the order they are written.
+/// A parameter that states no `=` holds no value at all, and is left out.
+///
+/// Facts:
+/// ```
+/// net.parseQuery("a=1&a=2") == new Mapping { ["a"] = new Listing { "1"; "2" } }
+/// net.parseQuery("q=a+b&bare") == new Mapping { ["q"] = new Listing { "a b" } }
+/// ```
+external const function parseQuery(query: String): Mapping<String, Listing<String>>
+----
+<1> Percent encode/decode components
+<2> Encode a mapping of strings into a query
+
+=== Language bindings
+
+Our language bindings will turn a `net.Url` into the corresponding URL type in the target language.
+
+|===
+|Language |Type
+
+|Swift
+|https://developer.apple.com/documentation/foundation/url[`URL`] (Foundation)
+
+|Java/Kotlin
+|https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/net/URI.html[`java.net.URI`] footnote:[Java also has a URL type, but its https://bugs.java.com/bugdatabase/view_bug.do?bug_id=4434494[usage is strongly discouraged].]
+
+|Go
+|https://pkg.go.dev/net/url[`net/url`]
+|===
+
+Third party language binding implementors are encouraged to map `net.Url` into their language's built-in URL type,
+if there is one.
+
+==== Message format
+
+When serialized, `net.Url` will be encoded as a `Typed` object (see https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html#non-primitives).
+
+The client in the host language will turn the URL into the target language via their respective codec/mapper/unmarshaller.
+
+When decoding, the language has to construct the URL component-wise (using a constructor and using `scheme`, `host`,
+etc. individually).
+
+== Compatibility
+
+Compatibility with `pkl.experimental.uri` was not a goal, but the two libraries are relatively similar (both based
+on RFC 3986).
+
+The `read(String)` and `read?(String)` primitives were not touched.
+
+The change to the `Uri` typealias is backward incompatible, but considered a bugfix.
+
+== Future directions
+
+More functions/properties can be added to the Url class, like `relativize`.
+We could also have encoded, fixed versions of all the base properties, like host, path, etc.
+
+IDNA, punnycode support could be added, if needed.
+
+If we add an IO/path API to Pkl we can convert between file URLs and paths. Same for native IP support: we can add
+properties to get an IP out of the host.
+
+== Alternatives considered
+
+=== Do nothing and keep using `pkl.experimental.uri`
+
+Performance suffers from having the parser in Pkl. It also can't solve the validation problem
+which should be added to the base String class.
+
+=== Use WHATWG instead of RFC 3986
+
+WHATWG is a more complex spec, with validations that require full URL context, so it's harder to add constraints to parts of an URL.
+It also requires IDNA support, which would add a lot of complexity to the implementation.
+
+== Acknowledgements
+
+Thanks, https://github.com/bioball[Dan Chao] for the https://github.com/apple/pkl-evolution/pull/13[previous SPICE on this theme].
