@@ -124,9 +124,9 @@ class Url {
   ///
   /// Facts:
   /// ```
-  /// net.Url("https://example.com/a/b%20c").segments == List("a", "b c")
+  /// net.Url("https://example.com/a/b%20c").pathSegments == List("a", "b c")
   /// ```
-  external fixed segments: List<String> // <3>
+  external fixed pathSegments: List<String>
 
   /// The percent-decoded parameters of [query], or an empty mapping if this URL has no query.
   ///
@@ -140,7 +140,7 @@ class Url {
   /// net.Url("https://example.com/?q=a+b&q=c").queryParameters["q"] == new Listing { "a b"; "c" }
   /// net.Url("https://example.com/").queryParameters.isEmpty
   /// ```
-  external fixed queryParameters: Mapping<String, Listing<String>> // <4>
+  external fixed queryParameters: Mapping<String, Listing<String>>
 
   /// Resolves [ref] against this URL.
   ///
@@ -156,7 +156,7 @@ class Url {
   /// net.Url("https://example.com/a/b").resolve("../c").toString() == "https://example.com/c"
   /// net.Url("https://example.com/a/b").resolve("#top").toString() == "https://example.com/a/b#top"
   /// ```
-  external function resolve(ref: String | Url): Url // <5>
+  external function resolve(ref: String | Url): Url
 
   /// Whether [other] identifies the same resource as this URL.
   ///
@@ -174,7 +174,7 @@ class Url {
   /// !(net.Url("https://example.com/a%2Fb").equals(net.Url("https://example.com/a/b")))
   /// !(net.Url("https://example.com:443/").equals(net.Url("https://example.com/")))
   /// ```
-  external function equals(other: Url): Boolean // <6>
+  external function equals(other: Url): Boolean
 
   /// The serialization of this URL.
   ///
@@ -187,16 +187,11 @@ class Url {
   /// net.Url("https://example.com/é").toString() == "https://example.com/%C3%A9"
   /// net.Url("HTTPS://example.com").toString() == "https://example.com"
   /// ```
-  external function toString(): String // <7>
+  external function toString(): String
 }
 ----
 <1> All properties are stored raw (as they are given) and are validated
 <2> URLs can be relative
-<3> The percent-encoded segments of `path`
-<4> A form-encoded mapping of the query parameters
-<5> Resolve a relative URL against this URL; throws if `this` is relative or `ref` is an invalid URL; returns `ref` if it is absolute
-<6> Normalized equality to know if two URLs are the same, unlike the structural comparison of `==`
-<7> Serialized String form with the whole URL properly encoded
 
 Examples:
 
