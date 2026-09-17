@@ -213,6 +213,19 @@ class Url {
   /// net.Url("HTTPS://example.com").toString() == "https://example.com"
   /// ```
   external function toString(): String
+
+  /// Whether every `%` in [value] begins a percent-encoded octet.
+  external local function isValidPercentEncoding(value: String): Boolean
+
+  /// Whether [value] is a `scheme`.
+  external local function isValidScheme(value: String): Boolean
+
+  /// Whether [value] is a `host`.
+  external local function isValidHost(value: String): Boolean
+
+  /// Whether [value] is a path that can sit next to an authority, or, when [hasAuthority] is
+  /// [false], next to no authority at all.
+  external local function isValidPath(value: String, hasAuthority: Boolean): Boolean
 }
 ----
 <1> All properties are stored raw (as they are given) and are validated
@@ -315,18 +328,9 @@ external const function buildQuery(parameters: Mapping<String, Listing<String>>)
 /// net.parseQuery("q=a+b&bare") == new Mapping { ["q"] = new Listing { "a b" } }
 /// ```
 external const function parseQuery(query: String): Mapping<String, Listing<String>>
-
-external local const function isValidPercentEncoding(value: String): Boolean // <3>
-
-external local const function isValidScheme(value: String): Boolean // <3>
-
-external local const function isValidHost(value: String): Boolean // <3>
-
-external local const function isValidPath(value: String, hasAuthority: Boolean): Boolean // <3>
 ----
 <1> Percent encode/decode components
 <2> Encode a mapping of strings into a query
-<3> Validation functions
 
 === Language bindings
 
@@ -354,8 +358,8 @@ When serialized, `net.Url` will be encoded as a `Typed` object (see https://pkl-
 
 The client in the host language will turn the URL into the target language via their respective codec/mapper/unmarshaller.
 
-When decoding, the language has a choice whether construct the URL either component-wise (using a constructor
-and using `scheme`, `host`, etc. individually), or by constructing the URL using the serialized string form.
+When decoding, the language has to construct the URL component-wise (using a constructor and using `scheme`, `host`,
+etc. individually).
 
 == Compatibility
 
