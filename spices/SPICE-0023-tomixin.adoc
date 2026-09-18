@@ -1,0 +1,252 @@
+= Object.toMixin()
+
+* Proposal: link:./SPICE-0023-tomixin.adoc[SPICE-0023]
+* Author: https://github.com/mikulas[Mike Dite]
+* Status: Accepted or Rejected
+* Implemented in: Pkl 0.31.0
+* Implementation: https://github.com/apple/pkl/pull/1257[apple/pkl#1257]
+* Category: Language, Standard Library
+
+== Introduction
+
+Adds a `toMixin()` method to the `Object` class that converts an object into a `Mixin` function.
+This enables runtime construction of mixins from dynamically created objects, enabling more flexible object composition patterns.
+
+== Motivation
+
+While mixins can be constructed at runtime in userland, such implementations evaluate the source object immediately, losing lazy evaluation and amendment semantics.
+This makes it impossible to preserve the composition behavior needed for proper object merging.
+
+For example, mixins are typically written as function literals:
+
+```pkl
+local personMixin = new Mixin<Person> {
+  name = "Pigeon"
+  age = 42
+}
+new Person { name = "Original" } |> personMixin
+```
+
+When attempting to construct a mixin from an existing object in userland (e.g., using spread operators or mappings), the object gets evaluated and the amendment semantics are lost (see <<_userland_implementation,Userland Implementation>>).
+
+With `toMixin()`, the object remains unevaluated and lazy, preserving amendment semantics so values can be composed further.
+
+```pkl
+local obj = new { name = "Pigeon"; age = 42 }
+new Person { name = "Original" } |> obj.toMixin()
+```
+
+This enables:
+
+- Runtime composition of configuration objects while preserving lazy evaluation
+- Proper merging behavior that respects amendment vs replacement semantics
+- More powerful config composition beyond static amends and extends
+- Implementation of transpilers from other languages to Pkl, improving adoption
+
+== Proposed Solution
+
+The `toMixin()` method converts any object into a `Mixin` function that can be applied to other objects.
+The resulting mixin merges properties, appends elements, and merges entries into the target object:
+
+```pkl
+obj = new { name = "Pigeon"; age = 42 }
+person = new Person { name = "Original" } |> obj.toMixin()
+// person.name == "Pigeon", person.age == 42
+```
+
+Mixins can be applied using the pipe operator (`|>`), `apply()`, or `applyToList()` methods.
+
+The method internally handles all object member types:
+
+- Properties: override existing values in the target
+- Elements: append to target's element list with correct index offsetting
+- Entries: merge into target's entry map
+
+== Detailed design
+
+=== API
+
+The method is added to the `Object` class:
+
+```pkl
+abstract external class Object extends Any {
+  /// Converts this object to a [Mixin] function.
+  ///
+  /// The resulting mixin can be applied to amend any object with the properties,
+  /// elements, and entries from this object.
+  ///
+  /// Example:
+  /// ```
+  /// obj = new { name = "Pigeon"; age = 42 }
+  /// person = new Person { name = "Original" } |> obj.toMixin()
+  /// // person.name == "Pigeon", person.age == 42
+  /// ```
+  @Since { version = "0.31.0" }
+  external function toMixin(): Mixin
+}
+```
+
+=== Behavior
+
+The returned mixin amends the target object with all members from the source object:
+
+**Properties**: Properties from the source object override properties in the target object.
+If the property value is assigned directly (replacement semantics), it replaces the target's value.
+If the property uses amendment syntax (block syntax), it amends the target's nested object.
+
+**Elements**: Elements from the source object are appended to the target's element list.
+Element indices are automatically offset to account for existing elements in the target.
+
+**Entries**: Entries from the source object are merged into the target's entry map.
+If a key exists in both objects, the source value overrides the target value.
+
+**Local members**: Local members in the source object are not included in the mixin.
+
+=== Implementation Details
+
+The implementation requires native code because:
+
+1. **Amendment vs replacement semantics**: The distinction between `a = new { b = 1 }` (replacement) and `a { b = 1 }` (amendment) is encoded in the object's member metadata at construction time and cannot be accessed from userland Pkl code.
+
+2. **Element index offsetting**: Elements must be properly offset based on the target object's existing element count, requiring access to internal member indices.
+
+3. **Enclosing frame context**: The implementation uses the source object's enclosing frame to ensure proper module context for type resolution during member evaluation.
+
+The returned `Mixin` function, when applied, evaluates members from the source object in the context of the target object, enabling proper composition while preserving type constraints and validation.
+
+== Compatibility
+
+This proposal adds a new method to the `Object` class and introduces no breaking changes.
+
+Existing Pkl programs continue to work without modification.
+The new `toMixin()` method is purely additive and does not affect existing mixin functionality or object composition patterns.
+
+Since `Object` is the base class for all objects in Pkl, the method is available on all object instances, including `Dynamic` and user-defined classes.
+
+The new method will appear in reflection results for all objects.
+Code that relies on reflection (e.g., iterating over all methods of an object) may need to be updated to account for the presence of `toMixin()`.
+
+== Future directions
+
+=== Typed Mixins
+
+Currently, the `Mixin` type is untyped - it accepts and produces `unknown` values.
+A future enhancement could introduce typed mixins that preserve type information:
+
+```pkl
+typealias Mixin<T> = (T) -> T
+
+function toMixin<T>(): Mixin<T>
+```
+
+This would enable:
+- Type-safe mixin composition with compile-time validation
+- IDE support for autocomplete and type checking when composing objects
+- Better error messages when mixing incompatible types
+
+However, typed mixins would require careful design to handle:
+- Variance and subtyping relationships
+- Structural vs nominal typing considerations
+- Interaction with Pkl's existing type system
+
+== Alternatives considered
+
+[[_userland_implementation]]
+=== Userland Implementation
+
+A userland implementation using the spread operator wa considered:
+
+```pkl
+function dynamicToMixin(mix: Dynamic): Mixin = (it) { ...mix }
+```
+
+However, this approach fails to preserve the distinction between amendment and replacement semantics in nested objects.
+
+For example, consider these two scenarios:
+
+```pkl
+local base = new {
+  a1 {
+    b1 = 2
+  }
+  a2 {
+    b1 = 2
+  }
+}
+
+local over = new Mixin {
+  a1 = new Dynamic {
+    b2 = 2
+  }
+  a2 {
+    b2 = 2
+  }
+}
+
+expectedValue = base |> over
+```
+
+Which results in
+```pkl
+expectedValue {
+  a1 {
+    b2 = 2
+  }
+  a2 {
+    b1 = 2
+    b2 = 2
+  }
+}
+```
+
+Notice that in the override `over` value of property `a1` gets replaced, as the mixin explicitly defines a new value. Property `a2` is correctly amended.
+
+A userland implementation using spread cannot access this semantic information, as it is encoded in the object's internal member metadata during construction and not available at runtime. Here is the same example, but with `over` defined as a `Dynamic` later converted to a `Mixin`.
+
+```pkl
+local base = new {
+  a1 {
+    b1 = 2
+  }
+  a2 {
+    b1 = 2
+  }
+}
+
+local over = new {
+  a1 = new Dynamic {
+    b2 = 2
+  }
+  a2 {
+    b2 = 2
+  }
+}
+
+function dynamicToMixin(mix: Dynamic): Mixin = new {
+  ...mix
+}
+
+wrongValue = base |> dynamicToMixin(over)
+```
+
+This results in lost amend semantics, with property `a2` incorrectly replaced.
+
+```pkl
+wrongValue {
+  a1 {
+    b2 = 2
+  }
+  a2 {
+    b2 = 2
+  }
+}
+```
+
+This limitation makes a native implementation necessary.
+
+=== Alternative Naming
+
+The name `toMixin()` was chosen to align with existing conversion methods in the standard library such as `toMapping()` and `toListing()`.
+This creates a consistent naming pattern for conversion functions.
+
+Alternative names like `asMixin()` or `convertToMixin()` were not seriously considered, as the `to*()` convention is well-established in Pkl and has been used to refer to this feature for years in the Pkl community.
