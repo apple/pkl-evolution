@@ -1,0 +1,192 @@
+= User Generic Methods
+
+* Proposal: link:./SPICE-0032-generic-methods.adoc[SPICE-0032]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.33
+* Category: Language, Tooling
+
+== Introduction
+
+Support for methods with type parameters in user code.
+
+== Motivation
+
+Currently, Pkl has basic support for generic methods, but only within its own standard library.
+
+This support is limited, primarily by "faking" type checking of type parameters.
+Unlike many statically compiled languages with generics, Pkl performs no type inference.
+All type checks against type parameters are a no-op and succeed implicitly.
+
+Generics are a powerful tool for API design and help make Pkl's standard library expressive.
+It would be great if this same power was available to users of Pkl.
+
+== Proposed Solution
+
+The restriction on declaring generic methods in user code will be lifted.
+User-declared class and object methods will be permitted.
+
+Additionally, new syntax for explicitly specifying type arguments in method calls will be added.
+Explicit type arguments in calls will be supported for all generic method calls, including generic methods in the standard library.
+
+A major goal of this effort is to avoid adding overhead to existing calls to non-generic methods or calls to generic methods that do not specify type arguments.
+
+== Detailed design
+
+=== Core implementation
+
+New syntax for specifying type arguments in generic method calls will be added:
+[source,pkl]
+----
+res = foo::<Bar>(baz)
+
+function foo<T>(arg: List(any((it) -> it is T))): Listing<T> = // ...
+----
+
+To users, specifying type arguments must appear visually to substitute the type argument (`Bar` here) for every usage of the corresponding type parameter (`T` here).
+As type nodes can reference other type parameters, rely on the receiver type (i.e. `this`  or `module`), or access arbitrary members in constraints, an implementation like Pkl's typealiases that inlines the alias body (with parameters replaced) at the usage site is not sufficient.
+The implementation must also handle arbitrary "nesting" of generic method calls where a type parameter may be passed as a type argument to another call.
+
+To achieve this, a few major changes are made to the language:
+
+* A new `VmTypeParameter` type is introduced (parallel to the existing `TypeParameter`) that tracks its "owner" as a runtime value or node (`VmClass`, `VmTypeAlias`, `ClassMethod`, or `ObjectMethodNode`).
+  * Usage of `TypeParameter` in the runtime (`AstBuilder`, `TypeVariableNode`, `VmType`, etc.) is replaced by `VmTypeParameter`
+* A new argument is added to every call/frame to store an array of caller-provided type arguments.
+The argument value is `null` when no type arguments are provided.
+* `AbstractInvokeMethodNode` and its subclasses now handle type arguments:
+** When type args are present, each `UnresolvedTypeNode` is resolved upon first execution, wrapped in a `RootNode` that executes the type check, and cached.
+** On each call, an array of `VmTypeArgument` instances are created, one for each type argument, capturing the caller's frame and the cached root node.
+*** The frame is only materialized and captured when it is needed to run the type check, i.e. if the `TypeNode` tree contains a constraint, a non-final self type, or a type parameter.
+** The array of `VmTypeArgument` instances is passed to the callee at argument index 2.
+* `TypeVariableNode` execution checks if its `VmTypeParameter` is owned by a method (`ClassMethod` or `ObjectMethodNode`) and if there are type arguments in the frame arguments.
+** If not, the type check is a no-op (existing behavior).
+** If yes, then it finds the matching `VmTypeArguments` and calls the stored root node with the captured enclosing frame.
+
+Special care must be taken in some scenarios:
+[source,pkl]
+----
+class Person { name: String }
+
+// Method return type inference
+local function makeNamed<T>(val: String): T = new { name = val }
+res1 = makeNamed::<Person>("bob")
+res1a = res1.getClass().toString() // "Person"
+
+// Method parameter type inference
+local function makeFromParam<T>(val: T): Listing<T> = new { val }
+res2 = makeFromParam::<Person>(new { name = "bob" })
+res2a = res2.first.getClass().toString() // "Person"
+
+// Listing/Mapping defaults and lazy type checks
+local function makeNamedListing<T>(val: String): Listing<T> = new {
+  new { name = val }
+}
+res3 = makeNamedListing::<Person>("bob")
+res3a = res3.first.getClass().toString() // "Person"
+----
+
+Existing method calls that do not specify type arguments have minimal additional overhead:
+
+* Negligible memory increase of one `null` pointer in every frame's arguments
+* Fail-fast checks for whether a `TypeVariableNode` is a no-op
+
+Pkl current disables return type checking for methods in the standard library as an optimization.
+This behavior is bypassed and type checks are performed when type arguments are present in the frame arguments.
+
+=== Improvements to `pkl:ref`
+
+The `pkl.ref#Reference()` constructor has been modified to remove its second argument (`class`) and instead accept the initial referent type as a call type argument:
+[source,pkl]
+----
+
+----
+
+This is a breaking change to the API, which is still considered experimental.
+
+=== Editor tooling
+
+To support resolving type arguments in generic calls, a few changes must be made on to pkl-intellij and pkl-lsp:
+
+* The grammar must be updated to support the new call syntax.
+* Resolving method call parameter and return types must account for specified type arguments, which must take precedence over the existing inference behavior.
+* Name resolution must be updated to ensure type parameters resolve inside object methods.
+
+== Compatibility
+
+Adding user generic methods and support for calling generic methods with explicit type arguments is purely additive.
+Existing Pkl code will continue to function as-is.
+
+The implementation of generic methods includes a breaking change to the `pkl.ref#Reference()` method, removing the second (`class`) parameter in favor of passing the referent type as an explicit method call type argument.
+In Pkl 0.32 this API is considered experimental and subject to breakage without warning.
+
+== Future directions
+
+=== Type argument constraints
+
+Currently, all generics in Pkl are "unbounded": any type may be used as an argument for any type parameter.
+This makes sense for all usage of generics in the standard library, but may not make sense in all cases for user code.
+
+In the future, new syntax could be introduced to impose type bounds on type parameters:
+[source,pkl]
+----
+function foo<T extends Bar | Baz?>(qux) = // ...
+// OR
+function foo<T: Bar | Baz?>(qux) = // ...
+----
+
+Type bounds likely shouldn't contain constraints as they would severely impede subtype checking.
+
+There are open questions to work out around subclassing and overriding of method type parameter bounds.
+It may be necessary to enforce that overriding methods use the exact same bounds as their supermethods.
+This still requires careful handling at polymorphic call sites, as the receiver may be an unrelated type with different bounds.
+
+=== User generic classes
+
+This SPICE only proposes lifting the restriction on generic methods in user code, but does not address the restriction on generic classes.
+Like generic methods, generic classes are a powerful API design tool currently only available in Pkl's standard library.
+Their implementation is similarly "fake"; all generic class type parameter typechecks are no-ops, except where handled specifically by bespoke language runtime code.
+Allowing generic classes in user code is a significant undertaking, but an implementation may be able to take advantages of runtime changes made for this proposal.
+
+== Alternatives considered
+
+=== Call syntax
+
+This SPICE opts for Rust-style "turbo fish" (`::<>`) syntax for specifying type arguments in method calls.
+The primary reasoning for this is that mirroring the generic method declaration syntax (i.e. without the `::`) is ambiguous: the parser cannot distinguish between calling a method with type arguments (`foo<Bar>(baz)`) and the "less than" operator (`foo < bar`) without arbitrary backtracking, which impacts Pkl's performance and security (as a vector for denial-of-service attacks).
+
+[source]
+----
+// Rust-style, as proposed
+foo::<Bar>(baz)
+
+// Type arguments as leading arguments
+foo(<Bar> baz)
+
+// Java-style (still ambiguous for unqualified method calls)
+<Bar>foo(baz)
+qux.<Bar>foo(baz)
+
+// Haskell-ish-style
+foo(@Bar, baz)
+
+// Lua-style
+foo<<Bar>>(baz)
+
+// Go/Python-style (ambiguous with subscript syntax)
+foo[Bar](baz)
+
+// Swift-style (requires types as in-language values)
+foo(Bar.self, baz) // still requires backtracking
+foo(type<Bar>, baz) // alternate no-backtracking type reification
+// where the decl is something like `function foo<T>(type: T.Type, baz)`
+
+// Alternate sigils
+foo#<Bar>(baz)
+foo&<Bar>(baz)
+foo@<Bar>(baz)
+foo'<Bar>(baz)
+foo!<Bar>(baz)
+foo^<Bar>(baz)
+----
+
+The Rust-style syntax was chose because it can be lexed and parsed unambiguously and without backtracking and there is prior art in a modern strongly-typed language.
