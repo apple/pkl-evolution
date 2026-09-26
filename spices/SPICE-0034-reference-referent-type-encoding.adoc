@@ -1,0 +1,169 @@
+= `Reference` referent type binary encoding enhancements
+
+* Proposal: link:./SPICE-0034-reference-referent-type-encoding.adoc[SPICE-0034]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.33
+* Category: Language, Language Bindings
+
+== Introduction
+
+Expand the binary encoding of `pkl.ref#Reference` values to include the type of the reference.
+
+== Motivation
+
+Currently, references are encoded to pkl-binary with their domain value, data value, and path.
+The fourth property of a reference, its referent type, is not encoded.
+Referent type information may be important to processes consuming data containing references, so it would be ideal to encode the referent type as well.
+
+== Proposed Solution
+
+A new field will be added to the wire format for a reference that encodes its referent type.
+This requires specifying an encoding for each type of type in the language.
+
+== Detailed design
+
+The encoding of `pkl.ref#Reference` will be updated to:
+
+|===
+|Pkl type |Slot 1 2+|Slot 2 2+|Slot 3 2+|Slot 4 2+|Slot 5
+
+||code |type |description |type |description |type |description |type |description
+
+|`Reference`
+|`0x20`
+|`<value>` (Typed)
+|Domain
+|`<value>`
+|Data
+|`array`
+|Array of `pkl.ref#Access` values
+|<<types, Type>>
+|Referent type
+|===
+
+New encoding for each of Pkl's types will be added:
+
+[[types]]
+|===
+|Type |Slot 1 2+|Slot 2 2+|Slot 3 2+|Slot 4
+
+| |code |type |description |type |description |type |description
+
+|`unknown`
+|`0x40`
+|
+|
+|
+|
+|
+|
+
+|`nothing`
+|`0x41`
+|
+|
+|
+|
+|
+|
+
+|String literal
+|`0x42`
+|`str`
+|Literal string value
+|
+|
+|
+|
+
+|Class
+|`0x43`
+|`<class>`
+|Class type declaration
+|`array`
+|Array of type arguments
+|
+|
+
+|`module`
+|`0x44`
+|`<class>`
+|https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html#non-primitives[Class] of the module where the `module` type was used
+|`bool`
+|Whether the class is final or not
+|
+|
+
+|`this`
+|`0x45`
+|`<class>`
+|https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html#non-primitives[Class] where the `this` type was used
+|`bool`
+|Whether the class is final or not
+|
+|
+
+|Nullable
+|`0x46`
+|`<type>`
+|Base type
+|
+|
+|
+|
+
+|Constrained
+|`0x47`
+|`<type>`
+|Base type
+|`array`
+|Array of `str` value representations of the type's constraints
+|
+|
+
+|TypeAlias
+|`0x48`
+|`<typealias>`
+|https://pkl-lang.org/main/current/bindings-specification/binary-encoding.html#non-primitives[Type Alias] type declaration
+|`array`
+|Array of type arguments
+|`<type>`
+|"Instantiated" aliased type
+
+|Union
+|`0x49`
+|`array`
+|Array of element types
+|`int`
+|Index of default element type (`-1` if no default)
+|
+|
+
+|Type Variable
+|`0x4A`
+|`int`
+|Type parameter Variance (0=invariant, 1=covariant, 2=contravariant)
+|`str`
+|Type parameter Name
+|`int`
+|Type parameter Index (within owner's type parameters)
+
+|===
+
+Corresponding types and decoding logic will be added to pkl-swift and pkl-go.
+
+NOTE: Due to normalization of referent types in references, nullable, constrained, `this`, and `module` types can never appear in pkl-binary-encoded reference values.
+These types are still specified here in case of future changes to referent normalization or <<future-directions,the addition of reified types>>.
+
+== Compatibility
+
+This is an additive change to the encoding of references.
+This may be a disruptive change for binding libraries that make assumptions about the number of fields for a specific value type code.
+Bindings that gracefully handle and discard superfluous fields in a value will see no impact; this includes pkl-swift and pkl-go versions that support the previous encoding of references.
+
+[[future-directions]]
+== Future directions
+
+A future Pkl release may add reified types as in-language values.
+Should that ever happen, this same encoding will be used for those values.
