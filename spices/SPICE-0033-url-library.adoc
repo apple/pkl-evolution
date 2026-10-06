@@ -44,7 +44,8 @@ A `%` that does not begin a percent-encoded octet is still rejected.
 
 [source,pkl]
 ----
-/// Parse a string into a URL, following [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986).
+/// Constructs a Url as described by [input], following
+/// [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986).
 /// Accepts a URL reference (one without a scheme).
 ///
 /// This is lenient: whatever a component cannot hold literally is percent-encoded, and whatever is
@@ -78,6 +79,9 @@ The percent-decoded form of each component is available as a `fixed` counterpart
 This follows the naming convention of most URL libraries, such as `java.net.URI`, where `raw` stands for the form
 that is still encoded.
 To change a path without encoding it first, `resolve()` can be used, as it is as lenient as `Url()`.
+
+The port is held as written in `rawPort`, since RFC 3986 allows an empty or out-of-range port (`https://example.com:/`).
+`port` is its `UInt16` value, or `null` if it has none, or it doesn't fit a UInt16.
 
 [source,pkl]
 ----
@@ -122,19 +126,33 @@ class Url {
   /// The percent-decoded [rawHost].
   hidden fixed host: String? = if (rawHost != null) decodeUrlComponent(rawHost) else null // <2>
 
-  /// The port, or [null] if this URL states none.
+  /// The port, without the leading `:`, or [null] if this URL states none.
   ///
   /// Only a URL with a [rawHost] can have a port.
-  port: UInt16(rawHost != null)? // <1>
+  rawPort: String(rawHost != null, matches(Regex(#"\d*"#)))? // <1>
+
+  /// The number that [rawPort] states.
+  ///
+  /// This is [null] if [rawPort] is [null], or if [rawPort] is not parseable as a [UInt16].
+  ///
+  /// Facts:
+  /// ```
+  /// net.Url("https://example.com:8080/").port == 8080
+  /// net.Url("https://example.com:/").port == null
+  /// ```
+  hidden fixed port: UInt16? = // <2>
+    let (parsed = rawPort?.toIntOrNull())
+      if (parsed is UInt16) parsed else null
 
   /// The percent-encoded path, or the empty string if this URL has none.
   ///
-  /// A URL with a [rawHost] has either an empty path or one starting with `/`.
-  /// A URL without one may also have a *rootless* path, as `mailto:user@example.com` does.
+  /// With a [rawHost], the path is empty or starts with `/`.
+  /// Without one, it may be *rootless*, as in `mailto:user@example.com`.
+  /// Without a [scheme], its first segment cannot contain `:`.
   ///
   /// To change the path without encoding it first, use [resolve()], which is as lenient as [Url()].
   /// Unlike amending, this drops [rawQuery] and [rawFragment].
-  rawPath: String(isValidPath(this, rawHost != null)) = "" // <1>
+  rawPath: String(isValidPath(this, scheme != null, rawHost != null)) = "" // <1>
 
   /// The percent-decoded [rawPath].
   ///
@@ -181,7 +199,7 @@ class Url {
   /// The authority, without the leading `//`, or [null] if this URL has none.
   ///
   /// A URL has an authority exactly when it has a [rawHost].
-  /// This is [rawUserInfo], [rawHost] and [port] joined back together.
+  /// This is [rawUserInfo], [rawHost] and [rawPort] joined back together.
   external fixed authority: String?
 
   /// What [rawHost] is, or [null] if this URL has no authority.
@@ -223,7 +241,7 @@ class Url {
   /// ```
   external fixed pathSegments: List<String>
 
-  /// The percent-decoded parameters of [rawQuery], or `null` if this URL has no query.
+  /// The percent-decoded parameters of [rawQuery], or [null] if this URL has no query.
   ///
   /// [rawQuery] is read as `application/x-www-form-urlencoded`.
   /// A name that repeats holds the values of all its occurrences, in the order they are written.
@@ -251,11 +269,12 @@ class Url {
   /// ```
   /// net.Url("https://example.com/a/b").resolve("../c").toString() == "https://example.com/c"
   /// net.Url("https://example.com/a/b").resolve("#top").toString() == "https://example.com/a/b#top"
+  /// net.Url("foo:/a").resolve("..//x").toString() == "foo:/.//x"
   /// ```
   external function resolve(ref: String | Url): Url
 
-  /// Returns this URL in the *syntax-based normalization* as described in
-  /// [section 6.2.2](https://www.rfc-editor.org/info/rfc3986/#section-6.2.2) of RFC-3986.
+  /// The normalized version of this URL, following *syntax-based normalization* as described in
+  /// [section 6.2.2](https://www.rfc-editor.org/info/rfc3986/#section-6.2.2) of RFC 3986.
   ///
   /// [scheme] and [rawHost] are lowercased, as they are case-insensitive.
   /// Percent-encoding is normalized: an octet standing for an unreserved character is decoded, and
@@ -264,22 +283,22 @@ class Url {
   /// Dot segments (`./` and `../`) are only removed from an absolute [rawPath].
   /// A URL with a [rawHost] and no path is given the path `/`, which names the same resource.
   ///
-  /// Does not perform *scheme-based normalization* as described in
-  /// [section 6.2.3](https://www.rfc-editor.org/info/rfc3986/#section-6.2.3).
+  /// Does not perform normalization that requires knowing the scheme, such as removing a default
+  /// port (see [section 6.2.3](https://www.rfc-editor.org/info/rfc3986/#section-6.2.3)).
   ///
   /// Facts:
   /// ```
-  /// net.Url("HTTPS://Example.com/%7Euser").normalize() == net.Url("https://example.com/~user")
-  /// net.Url("https://example.com/a/b/../c").normalize().rawPath == "/a/c"
-  /// net.Url("https://example.com").normalize().rawPath == "/"
+  /// net.Url("HTTPS://Example.com/%7Euser").normalized == net.Url("https://example.com/~user")
+  /// net.Url("https://example.com/a/b/../c").normalized.rawPath == "/a/c"
+  /// net.Url("https://example.com").normalized.rawPath == "/"
   /// ```
-  external function normalize(): Url
+  external hidden fixed normalized: Url
 
-  /// Tells whether this url is equal to [other] according to *syntax-based normalization* as
+  /// Tells if this URL is equal to [other] according to *syntax-based normalization* as
   /// described in [section 6.2.2](https://www.rfc-editor.org/info/rfc3986/#section-6.2.2) of
-  /// RFC-3986.
+  /// RFC 3986.
   ///
-  /// This will return [true] if the [normalized][normalize] versions of [this] and [other] are the
+  /// Returns [true] if the [normalized] versions of [this] and [other] are the
   /// same, and [false] otherwise.
   ///
   /// Facts:
@@ -296,7 +315,7 @@ class Url {
   /// ```
   /// net.Url("https://example.com/a b").toString() == "https://example.com/a%20b"
   /// net.Url("https://example.com/é").toString() == "https://example.com/%C3%A9"
-  /// net.Url("HTTPS://example.com").toString() == "https://example.com"
+  /// net.Url("HTTPS://example.com").toString() == "HTTPS://example.com"
   /// ```
   external function toString(): String
 
@@ -309,9 +328,9 @@ class Url {
   /// Tells if [value] is a percent-encoded `host`.
   external function isValidHost(value: String): Boolean
 
-  /// Tells if [value] is a percent-encoded path that can sit next to an authority, or, when
-  /// [hasAuthority] is [false], next to no authority at all.
-  external function isValidPath(value: String, hasAuthority: Boolean): Boolean
+  /// Tells if [value] is a percent-encoded path that can sit next to a scheme and an authority, or,
+  /// when [hasScheme] or [hasAuthority] is [false], next to no scheme or no authority.
+  external function isValidPath(value: String, hasScheme: Boolean, hasAuthority: Boolean): Boolean
 
   /// Tells if [value] is a percent-encoded `query`.
   external function isValidQuery(value: String): Boolean
@@ -347,7 +366,7 @@ resolved = url.resolve("../d/e").toString() // <6>
 
 amended = (url) {
   rawHost = "another.com"
-  port = null
+  rawPort = null
   rawPath = "/x%20y"
 }.toString() // <7>
 ----
@@ -471,7 +490,7 @@ When serialized, `net.Url` will be encoded as a `Typed` object (see https://pkl-
 
 The client in the host language will turn the URL into the target language via their respective codec/mapper/unmarshaller.
 
-The object carries the percent-encoded components (`scheme`, `rawUserInfo`, `rawHost`, `port`, `rawPath`, `rawQuery`
+The object carries the percent-encoded components (`scheme`, `rawUserInfo`, `rawHost`, `rawPort`, `rawPath`, `rawQuery`
 and `rawFragment`), as well as `stringValue`, the serialized URL.
 When decoding, the language can parse `stringValue` with its own URL parser.
 
