@@ -43,24 +43,31 @@ res = foo::<Bar>(baz)
 function foo<T>(arg: List(any((it) -> it is T))): Listing<T> = // ...
 ----
 
+Modules outside the standard library will be able to define methods in modules, classes, or objects using the existing syntax.
+Use of variance modifier (`in` or `out`) on method type parameters will be forbidden.
+
 To users, specifying type arguments must appear visually to substitute the type argument (`Bar` here) for every usage of the corresponding type parameter (`T` here).
 As type nodes can reference other type parameters, rely on the receiver type (i.e. `this`  or `module`), or access arbitrary members in constraints, an implementation like Pkl's typealiases that inlines the alias body (with parameters replaced) at the usage site is not sufficient.
 The implementation must also handle arbitrary "nesting" of generic method calls where a type parameter may be passed as a type argument to another call.
 
 To achieve this, a few major changes are made to the language:
 
-* A new `VmTypeParameter` type is introduced (parallel to the existing `TypeParameter`) that tracks its "owner" as a runtime value or node (`VmClass`, `VmTypeAlias`, `ClassMethod`, or `ObjectMethodNode`).
-  * Usage of `TypeParameter` in the runtime (`AstBuilder`, `TypeVariableNode`, `VmType`, etc.) is replaced by `VmTypeParameter`
-* A new argument is added to every call/frame to store an array of caller-provided type arguments.
-The argument value is `null` when no type arguments are provided.
-* `AbstractInvokeMethodNode` and its subclasses now handle type arguments:
-** When type args are present, each `UnresolvedTypeNode` is resolved upon first execution, wrapped in a `RootNode` that executes the type check, and cached.
+* A new `org.pkl.core.runtime.TypeParameter` type is introduced to track type parameter metadata.
+** Usage of `org.pkl.core.TypeParameter` in the runtime (`AstBuilder`, `TypeVariableNode`, `VmType`, etc.) is replaced by `org.pkl.core.runtime.TypeParameter`.
+* A new `org.pkl.core.runtime.VmTypeArgument` type is introduced to track type argument evaluation closure state.
+* In `AstBuilder`, type parameter handling is revised:
+** During definition, allocate frame slots are to hold `VmTypeArgument` instances in generic methods.
+*** During resolution, determine the param's lexical levels up and its owner type (class, typealias, or method).
+* `AbstractInvokeMethodNode` now handles type arguments:
+** When type args are present, each `UnresolvedTypeNode` is resolved upon first execution, wrapped in a root node that executes the type check, and then cached.
 ** On each call, an array of `VmTypeArgument` instances are created, one for each type argument, capturing the caller's frame and the cached root node.
 *** The frame is only materialized and captured when it is needed to run the type check, i.e. if the `TypeNode` tree contains a constraint, a non-final self type, or a type parameter.
-** The array of `VmTypeArgument` instances is passed to the callee at argument index 2.
-* `TypeVariableNode` execution checks if its `VmTypeParameter` is owned by a method (`ClassMethod` or `ObjectMethodNode`) and if there are type arguments in the frame arguments.
+** The `VmTypeArgument` instances are passed as frame arguments in method calls (preceding the evaluated method args).
+*** These value are `null` when no type arguments are provided in the call.
+* `FunctionNode` writes each passed type argument to the frame slot of the corresponding type parameter.
+* `TypeVariableNode` execution checks if its `TypeParameter` is owned by a method and if there are type arguments in the (lexically resolved) frame.
 ** If not, the type check is a no-op (existing behavior).
-** If yes, then it finds the matching `VmTypeArguments` and calls the stored root node with the captured enclosing frame.
+** If yes, then it finds the matching `VmTypeArgument` and calls the stored root node with the captured enclosing frame.
 
 Special care must be taken in some scenarios:
 [source,pkl]
@@ -98,10 +105,19 @@ This behavior is bypassed and type checks are performed when type arguments are 
 The `pkl.ref#Reference()` constructor has been modified to remove its second argument (`class`) and instead accept the initial referent type as a call type argument:
 [source,pkl]
 ----
+// new constructor signature
+external const function Reference<Domain, Type>(
+  domain: Domain(this is AbstractDomain),
+  data: Any,
+): Reference<Domain, Type>
 
+// construct a reference directly to type that isn't an unparameterized class:
+complexReference = Reference::<MyDomain, Listing<String | Int>?>(myDomain, data)
 ----
 
-This is a breaking change to the API, which is still considered experimental.
+The `Domain` class in the `pkl.ref` module will be renamed to `AbsstractDomain` to avoid collisions with the named type parameters in the `Reference` class and constructor (`D` -> `Domain`).
+
+These are a breaking changes to the API, which is still considered experimental.
 
 === Editor tooling
 
@@ -121,7 +137,7 @@ In Pkl 0.32 this API is considered experimental and subject to breakage without 
 
 == Future directions
 
-=== Type argument constraints
+=== Type parameter bounds
 
 Currently, all generics in Pkl are "unbounded": any type may be used as an argument for any type parameter.
 This makes sense for all usage of generics in the standard library, but may not make sense in all cases for user code.
@@ -138,7 +154,10 @@ Type bounds likely shouldn't contain constraints as they would severely impede s
 
 There are open questions to work out around subclassing and overriding of method type parameter bounds.
 It may be necessary to enforce that overriding methods use the exact same bounds as their supermethods.
-This still requires careful handling at polymorphic call sites, as the receiver may be an unrelated type with different bounds.
+This still requires careful handling at (union) polymorphic call sites, as the receiver may be an unrelated type with different bounds.
+
+After type parameter bounds are added to the language, Pkl's editor tooling should type check within generic method bodies.
+For example, a type parameter `T` that is not bounded by `Object` (or a subtype of it) should warn/error where the type is instantiated (`new T {}`).
 
 === User generic classes
 
@@ -169,7 +188,7 @@ qux.<Bar>foo(baz)
 // Haskell-ish-style
 foo(@Bar, baz)
 
-// Lua-style
+// Luau-style
 foo<<Bar>>(baz)
 
 // Go/Python-style (ambiguous with subscript syntax)
