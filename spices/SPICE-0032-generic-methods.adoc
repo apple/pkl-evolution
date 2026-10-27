@@ -38,7 +38,7 @@ A major goal of this effort is to avoid adding overhead to existing calls to non
 New syntax for specifying type arguments in generic method calls will be added:
 [source,pkl]
 ----
-res = foo::<Bar>(baz)
+res = foo<Bar>(baz)
 
 function foo<T>(arg: List(any((it) -> it is T))): Listing<T> = // ...
 ----
@@ -76,19 +76,19 @@ class Person { name: String }
 
 // Method return type inference
 local function makeNamed<T>(val: String): T = new { name = val }
-res1 = makeNamed::<Person>("bob")
+res1 = makeNamed<Person>("bob")
 res1a = res1.getClass().toString() // "Person"
 
 // Method parameter type inference
 local function makeFromParam<T>(val: T): Listing<T> = new { val }
-res2 = makeFromParam::<Person>(new { name = "bob" })
+res2 = makeFromParam<Person>(new { name = "bob" })
 res2a = res2.first.getClass().toString() // "Person"
 
 // Listing/Mapping defaults and lazy type checks
 local function makeNamedListing<T>(val: String): Listing<T> = new {
   new { name = val }
 }
-res3 = makeNamedListing::<Person>("bob")
+res3 = makeNamedListing<Person>("bob")
 res3a = res3.first.getClass().toString() // "Person"
 ----
 
@@ -112,7 +112,7 @@ external const function Reference<Domain, Type>(
 ): Reference<Domain, Type>
 
 // construct a reference directly to type that isn't an unparameterized class:
-complexReference = Reference::<MyDomain, Listing<String | Int>?>(myDomain, data)
+complexReference = Reference<MyDomain, Listing<String | Int>?>(myDomain, data)
 ----
 
 The `Domain` class in the `pkl.ref` module will be renamed to `AbsstractDomain` to avoid collisions with the named type parameters in the `Reference` class and constructor (`D` -> `Domain`).
@@ -170,18 +170,40 @@ Allowing generic classes in user code is a significant undertaking, but an imple
 
 === Call syntax
 
-This SPICE opts for Rust-style "turbo fish" (`::<>`) syntax for specifying type arguments in method calls.
-The primary reasoning for this is that mirroring the generic method declaration syntax (i.e. without the `::`) is ambiguous: the parser cannot distinguish between calling a method with type arguments (`foo<Bar>(baz)`) and the "less than" operator (`foo < bar`) without arbitrary backtracking, which impacts Pkl's performance and security (as a vector for denial-of-service attacks).
+This SPICE proposes generic call syntax that is congruent with generic method declaration syntax.
+The primary motivation for choosing this syntax is familiarity; specifying type arguments in method calls in likely to be a relatively uncommon task for a majority of Pkl users, so maximizing new or one-off syntax for calls.
 
+This syntax has a complication: it can be ambiguous with other Pkl syntax.
+These two expressions differ only in whitespace to better show the two different interpretations:
+[source,pkl]
+----
+methodCall = foo( // <1>
+  bar<Baz, Qux>(quux + corge),
+)
+
+comparisons = foo( // <2>
+  bar < Baz,
+  Qux > (quux + corge),
+)
+----
+<1> `foo` and `bar` are methods, `Baz` and `Qux` are declared types, `quux` and `corge` are properties.
+<2> `foo` is method and `bar`, `Baz`, `Qux`, `quux`, and `corge` are properties.
+
+To resolve this ambiguity, Pkl's parser will always parse this input as a method call.
+This may be a breaking change for some Pkl code, but examination of large corpuses did not find any real world breakage.
+To force the "comparisons" interpretation, surrounding `bar` with parentheses prevents interpreting it as a method call.
+
+An alternative design could choose unambiguous syntax that simplifies parsing (and eliminates backtracking), but with the downside that generic method call syntax must be learned and remembered as a one-off.
+These possible alternatives were considered:
 [source]
 ----
-// Rust-style, as proposed
+// Rust-style "turbofish"
 foo::<Bar>(baz)
 
 // Type arguments as leading arguments
 foo(<Bar> baz)
 
-// Java-style (still ambiguous for unqualified method calls)
+// Java-style (also ambiguous for unqualified method calls)
 <Bar>foo(baz)
 qux.<Bar>foo(baz)
 
