@@ -1,6 +1,6 @@
 = pkl:syntax Standard Library Module
 
-* Proposal: link:./SPICE-0034-pkl-syntax-library.adoc[SPICE-0034]
+* Proposal: link:./SPICE-0035-pkl-syntax-library.adoc[SPICE-0035]
 * Author: link:https://github.com/stackoverflow[Islon Scherer]
 * Status: Accepted
 * Implemented in: Pkl 0.33
