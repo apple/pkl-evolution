@@ -35,6 +35,7 @@ Add a `pkl:syntax` module with three pieces:
 * `Parser`, which parses a string or `Resource` as a module or as an expression.
 * `Node`, a generic, untyped syntax tree node, with methods to search and to transform the tree.
 * `FormattingRenderer`, which renders a `Node` back to Pkl source code using the canonical Pkl formatter.
+* `SExpressionRenderer`, which renders a `Node` into an https://en.wikipedia.org/wiki/S-expression[S-Expression].
 
 The tree is _lossless_: it keeps comments, whitespace-significant tokens, and the verbatim text of tokens, so parsing and rendering a module does not discard information.
 
@@ -102,13 +103,34 @@ class FormattingRenderer {
   grammarVersion: "V1" | "V2" = "V2"
 
   /// Render [node] as Pkl source code.
-  external function render(node: Node): String
+  external function renderValue(node: Node): String
 }
 ----
 
 Rendering applies the same formatting rules as `pkl format`.
 The renderer formats from the tree, not from the original text, so a rendered tree is canonically formatted regardless of how it was written or built.
 Only the `text` of terminal nodes is used. So constructed non-terminal nodes don't need to fill `text`.
+
+=== `SExpressionRenderer`
+
+Renders a `Node` into an S-Expression.
+This renderer is designed to help debug the structure of parse trees.
+
+[source,pkl]
+----
+class SExpressionRenderer {
+  /// Whether to render the [Node.text] of terminal nodes whose text is not implied by their
+  /// [Node.type].
+  ///
+  /// If [true], the text follows the type as a quoted, escaped string, as in
+  /// `(int_literal_expr "5")`.
+  /// If [false], only the type is rendered.
+  renderTerminalText: Boolean = true
+
+  /// Renders [value] as a S-expression.
+  function renderValue(value: Node): String
+}
+----
 
 === `Node`
 
@@ -316,7 +338,6 @@ Because they mirror the grammar, new language features can add node types, and c
 Instead of a single generic `Node`, a `Module`, `Class`, `Property`, `IfExpr`, and so on could expose named, typed properties and construct trees without knowing the shape of `children`.
 Such an API could be layered on top of the generic API, and is expected to be proposed separately.
 * Further navigation helpers, such as siblings or ancestors-or-self, and a visitor-style API.
-* Additional renderers, such as one that outputs an S-expression representation of a tree for debugging.
 
 == Alternatives considered
 
