@@ -78,24 +78,8 @@ a|Annotation type (only applicable within the bodies of `Annotation` subclasses)
 e.g. `@this { ... }`
 
 |Inside a type constraint
-a|Class of the visibly immediate enclosing receiver
-
-Does not refer to the class of the constrained type (the value of the `this` expression within a constraint).
-
-[source,pkl]
-----
-class Foo {
-  bar: List(first is this) // <1>
-}
-
-baz {
-  qux = quux is List(first is this) // <2>
-}
-----
-<1> `this` refers to `Foo`
-<2> `this` refers to the type of `baz`
-
-a|Object body parameter
+|Class of the value being checked against the constraint
+|Object body parameter
 .4+a|Class of the visibly _second_ enclosing receiver
 
 [source,pkl]
