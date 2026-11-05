@@ -125,6 +125,37 @@ PKL_EXPORT int pkl_close(pkl_exec_t *pexec, pkl_error_t *error);
 PKL_EXPORT const char* pkl_version();
 ----
 
+=== Library format
+
+The build will produce both shared and statically linked libraries.
+This addresses the needs of different users:
+
+* A dynamic library allows applications to optionally bind to Pkl if it is present on the host machine.
+* A static library allows applications to ship their full set of dependencies without needing to install system libraries.
+
+To support either use-case, the library will be published as an archive.
+The archive will have the following layout:
+
+[source]
+----
+.
+└── libpkl-<version>-<os>-<arch>
+    ├── include
+    │   └── pkl.h
+    ├── lib
+    │   ├── libpkl.<shared library extension>
+    │   ├── libpkl.<static library extension>
+    │   └── pkgconfig
+    │       ├── libpkl-static.pc
+    │       └── libpkl.pc
+    ├── LICENSE.txt
+    ├── README.md
+    └── THIRD-PARTY-NOTICES.txt
+----
+
+Downstream bindings can optionally bind either statically or dynamically via their compiler's compilation unit mechanism.
+For example, pkl-go can enable features using build tags, and pkl-swift can enable features using macros.
+
 == Compatibility
 
 libpkl links `native-image`'s runtime internals statically, so the shared library's only external dynamic dependencies are the platform C library, `zlib`, and, on macOS, the `Foundation` and `CoreServices` frameworks.
