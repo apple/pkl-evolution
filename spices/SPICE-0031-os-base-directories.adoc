@@ -141,6 +141,15 @@ This avoids keeping a permanent fallback code path.
 However, a first-run migration that writes files to system dirs is more complex (e.g. it introduces race conditions if Pkl is run simultaneously; some file systems lack atomic move operations), and hard to write correctly.
 Additionally, it adds a check on every invocation, which adds more overhead.
 
+=== Using macOS native system paths
+
+macOS has its own convention for system paths.
+For example, cache are often stored under `~/Library/Caches`.
+
+However, it is also common for unix-style tools to store files under XDG-style paths (for example, `fish`, `vim`, `git`).
+
+To align more universally with other unix tools, Pkl will also align with XDG.
+
 == Acknowledgements
 
 Thanks to https://github.com/florinungur[Florin Ungur], who authored the first implementation this proposal!
