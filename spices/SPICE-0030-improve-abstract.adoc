@@ -1,0 +1,75 @@
+= Improve `abstract`
+
+* Proposal: link:./SPICE-0030-improve-abstract.adoc[SPICE-0030]
+* Author: https://github.com/HT154[Jen Basch]
+* Status: TBD
+* Implemented in: Pkl 0.30
+* Category: Language, Tooling
+
+== Introduction
+
+Refine the behavior of `abstract` classes, properties, and methods in Pkl.
+
+== Motivations
+
+Currently, `abstract` has some shortcomings:
+
+. Abstract members in non-abstract classes are not rejected (https://github.com/apple/pkl/issues/1614[#1614]).
+. There is no enforcement that non-abstract classes implement all abstract members of their abstract superclass(es) (https://github.com/apple/pkl/issues/1262[#1262]).
+. It is not fully clear what a property being abstract means:
+** The `abstract` modifier implies that the property does not need an "implementation" (default value), but that is already the case for non-fixed properties.
+** In abstract classes, fixed properties with no default value requires that subclasses override the property to supply a default value, already fulfilling this need.
+
+These shortcomings are independent but related, so this SPICE groups them together.
+
+== Proposed Solutions
+
+. Abstract members in non-abstract classes will result in an error.
+
+. Subclassing an abstract class without overriding all abstract members will result in an error.
+
+. The `abstract` modifier will be removed for properties.
+It will continue to be accepted by the parser to retain source compatibility, but will be otherwise ignored.
+This has only a few downstream affects:
+* Removal of validation that abstract properties may not have a default value.
+* Removal of tailored error message for access to an abstract property.
+* Reflection-based interfaces (`pkl:reflect`, `PClass` and friends, and pkl-doc) will no longer include the `abstract` modifier even when it is still present in the source code.
+
++
+Editor tooling will provide warning and unused diagnostics with a quick-fix to remove the modifier.
+
+== Detailed designs
+
+=== 1. Enforce no abstract methods in non-abstract classes
+
+Abstract methods defined in non-abstract classes may be identified at parse time (in `AstBuilder`).
+When a class or module's members are processed, if the type is not abstract then each method will be checked.
+If a method has the `abstract` modifier, parsing will fail and identify the method.
+
+=== 2. Enforce non-abstract classes must override abstract members
+
+Identifying abstract methods that are not overridden by non-abstract subclasses must be done after a `VmClass` and all of its superclasses are initialized.
+Pkl allows type cycles, so `VmClass` initialization is non-linear: a class is constructed and may be only partially initialized at the time a child class is initialized.
+To handle this, a `VmClass` completing initialization must determine if its superclasses are fully initialized:
+
+* If all superclasses are initialized, check for abstract methods that are not overridden.
+* Otherwise, for each uninitialized superclass, register a finalizer to run after its initialization completes.
+When the last finalizer is run, perform the same check for abstract methods that are not overridden.
+
+=== 3. Remove abstract properties
+
+Removing abstract properties by ignoring the modifier is a small change in `AstBuilder` to strip the modifier before constructing the `UnresolvedPropertyNode`.
+Additionally, checks specifically for abstract properties (`CannotInvokeAbstractPropertyNode` and parts of `pkl:reflect`) are removed.
+
+There are several properties in the Pkl standard library that are marked abstract (members of `Number`, `Collection`, and `pkl.reflect#TypeDeclaration`).
+In all of these cases the modifier is removed, which does not impact any clients of these APIs.
+
+== Compatibility
+
+. Enforcing no abstract method in non-abstract classes is a source-breaking change.
+We consider this breakage to be minor as code that would break is likely already not functioning correctly (i.e. the abstract method cannot be called).
+. Enforcing that non-abstract subclasses must override abstract methods in abstract superclasses is also a source-breaking change.
+Similarly, we consider this breaking to be minor as attempts to call an un-overridden abstract method would fail today.
+. Removing abstract properties (by ignoring the modifier) is not a source-breaking change, but may be a breaking change to clients of the `pkl:reflect` or `PClass` APIs looking for an `abstract` modifier on properties.
+We also consider this to be minor breaking change since abstract properties have unclear semantics and are not widely used.
+A future Pkl release may reject the `abstract` modifier on properties instead of ignoring it; this would be a source-breaking change
